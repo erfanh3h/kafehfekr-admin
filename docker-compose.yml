@@ -1,0 +1,23 @@
+version: "3.8"
+
+services:
+  kafehfekr_admin:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kafehfekr_admin
+    restart: unless-stopped
+    ports:
+      - "5002:5002"
+    environment:
+      - PORT=5002
+      - HOST=0.0.0.0
+      - MONGO_URI=mongodb://mongo:27017/
+      - SECRET_KEY=09da5e74afaa9ma2565c818195b7b9563b93xc059f6f0f4cab6cf63b88e8d3e7
+      - BACKUP_DIR=/app/Backups/
+    networks:
+      - kafehfekr_net
+
+networks:
+  kafehfekr_net:
+    external: true

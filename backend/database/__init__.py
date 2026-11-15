@@ -1,0 +1,37 @@
+import os
+import pymongo
+from database.admin_collection import AdminCollectionManager
+
+
+class AdminDatabase:
+    """Central database gateway for the Kafeh Fekr Admin Backend."""
+
+    def __init__(self):
+        mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
+        self.client = pymongo.MongoClient(mongo_uri)
+        self.db = self.client["KafehFekrDB"]
+
+        # Collections
+        self.users = self.db["users"]
+        self.user_history = self.db["user_history"]
+        self.game_play_history = self.db["game_play_history"]
+        self.game_history = self.db["game_history"]
+        self.purchases = self.db["purchases"]
+        self.config = self.db["config"]
+        self.clans = self.db["clans"]
+        self.clan_members = self.db["clan_members"]
+        self.clan_challenges = self.db["clan_challenges"]
+        self.social_reports = self.db["social_reports"]
+        self.admins_col = self.db["admins"]
+        self.audit_logs = self.db["admin_audit_logs"]
+
+        self.admin_manager = AdminCollectionManager(self.admins_col)
+
+    def init_database(self):
+        try:
+            self.admin_manager.ensure_default_superadmin()
+        except Exception as e:
+            print(f"[AdminDatabase] Init notice: {e}")
+
+
+db = AdminDatabase()
