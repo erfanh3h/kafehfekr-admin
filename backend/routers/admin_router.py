@@ -8,6 +8,12 @@ from services import admin_service
 router = APIRouter(prefix='/admin', tags=['admin'])
 
 
+def _dump(model: BaseModel, **kwargs) -> dict:
+    if hasattr(model, "model_dump"):
+        return model.model_dump(**kwargs)
+    return model.dict(**kwargs)
+
+
 # -------------------------------------------------------------
 # Request Schemas
 # -------------------------------------------------------------
@@ -133,7 +139,7 @@ async def create_new_admin(
 ):
     if current_admin.get("role") != "superadmin":
         raise HTTPException(status_code=403, detail="فقط مدیر ارشد دسترسی دارد.")
-    new_adm = admin_service.create_admin(current_admin["_id"], payload.model_dump())
+    new_adm = admin_service.create_admin(current_admin["_id"], _dump(payload))
     return {"admin": new_adm}
 
 
@@ -145,7 +151,7 @@ async def update_admin_user(
 ):
     if current_admin.get("role") != "superadmin":
         raise HTTPException(status_code=403, detail="فقط مدیر ارشد دسترسی دارد.")
-    updated = admin_service.update_admin(admin_id, payload.model_dump(exclude_unset=True))
+    updated = admin_service.update_admin(admin_id, _dump(payload, exclude_unset=True))
     return {"admin": updated}
 
 
@@ -170,6 +176,7 @@ async def get_dashboard_stats(current_admin: dict = Depends(get_current_admin)):
 
 
 @router.get("/audit-logs")
+@router.get("/system/audit-logs")
 async def get_audit_logs(
     limit: int = 50,
     current_admin: dict = Depends(get_current_admin),
@@ -215,7 +222,7 @@ async def update_user(
     payload: UpdateUserRequest,
     current_admin: dict = Depends(get_current_admin),
 ):
-    updated = admin_service.update_user_profile(user_id, payload.model_dump(exclude_unset=True))
+    updated = admin_service.update_user_profile(user_id, _dump(payload, exclude_unset=True))
     return {"user": updated}
 
 
@@ -430,7 +437,7 @@ async def update_clan(
 ):
     return admin_service.update_clan_info(
         clan_id=clan_id,
-        updates=payload.model_dump(exclude_unset=True),
+        updates=_dump(payload, exclude_unset=True),
         admin_id=current_admin["_id"],
     )
 

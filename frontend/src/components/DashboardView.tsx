@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { DashboardStats } from '../types';
 import { ApiService } from '../services/api';
+import { NavTab } from './Sidebar';
 
 interface DashboardViewProps {
   stats: DashboardStats | null;
@@ -23,6 +24,7 @@ interface DashboardViewProps {
   onRefresh: () => void;
   onOpenBulkCoins: () => void;
   onNotify: (msg: string, type?: 'success' | 'error' | 'info') => void;
+  onNavigateTab?: (tab: NavTab) => void;
   lang: 'fa' | 'en';
 }
 
@@ -32,6 +34,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onRefresh,
   onOpenBulkCoins,
   onNotify,
+  onNavigateTab,
   lang,
 }) => {
   const isFa = lang === 'fa';
@@ -169,7 +172,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
       {/* KPI Cards Grid */}
       <div className="kpi-grid">
-        <div className="kpi-card">
+        <div
+          className="kpi-card"
+          onClick={() => onNavigateTab && onNavigateTab('users')}
+          style={{ cursor: onNavigateTab ? 'pointer' : 'default' }}
+          title={isFa ? 'برای مدیریت کاربران کلیک کنید' : 'Click to manage users'}
+        >
           <div className="kpi-icon sapphire">
             <Users size={26} />
           </div>
@@ -179,10 +187,24 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <span className="kpi-subtext">
               {isFa ? `${stats?.users.real || 0} کاربر واقعی | ${stats?.users.bots || 0} ربات` : `${stats?.users.real || 0} Real`}
             </span>
+            <div className="card-meter">
+              <div
+                className="card-meter-fill"
+                style={{
+                  width: `${stats?.users.total ? Math.min(100, Math.round(((stats.users.real || 0) / stats.users.total) * 100)) : 100}%`,
+                  background: 'var(--sapphire)',
+                }}
+              />
+            </div>
           </div>
         </div>
 
-        <div className="kpi-card">
+        <div
+          className="kpi-card"
+          onClick={() => onNavigateTab && onNavigateTab('games')}
+          style={{ cursor: onNavigateTab ? 'pointer' : 'default' }}
+          title={isFa ? 'برای مشاهده مسابقات کلیک کنید' : 'Click to view matches'}
+        >
           <div className="kpi-icon gold">
             <Gamepad2 size={26} />
           </div>
@@ -192,10 +214,24 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <span className="kpi-subtext">
               {isFa ? `${stats?.matches.live || 0} مسابقه زنده | ${stats?.matches.finished || 0} پایان‌یافته` : `${stats?.matches.live || 0} Live`}
             </span>
+            <div className="card-meter">
+              <div
+                className="card-meter-fill"
+                style={{
+                  width: `${stats?.matches.total ? Math.min(100, Math.round(((stats.matches.finished || 0) / stats.matches.total) * 100)) : 100}%`,
+                  background: 'var(--gold-primary)',
+                }}
+              />
+            </div>
           </div>
         </div>
 
-        <div className="kpi-card">
+        <div
+          className="kpi-card"
+          onClick={() => onNavigateTab && onNavigateTab('purchases')}
+          style={{ cursor: onNavigateTab ? 'pointer' : 'default' }}
+          title={isFa ? 'برای مشاهده تراکنش‌ها کلیک کنید' : 'Click to view store transactions'}
+        >
           <div className="kpi-icon emerald">
             <ShoppingBag size={26} />
           </div>
@@ -205,10 +241,24 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <span className="kpi-subtext">
               {isFa ? `بازار: ${stats?.purchases.bazaar || 0} | مایکت: ${stats?.purchases.myket || 0}` : `Bazaar: ${stats?.purchases.bazaar || 0}`}
             </span>
+            <div className="card-meter">
+              <div
+                className="card-meter-fill"
+                style={{
+                  width: `${stats?.purchases.total ? Math.min(100, Math.round(((stats.purchases.bazaar || 0) / stats.purchases.total) * 100)) : 100}%`,
+                  background: 'var(--emerald)',
+                }}
+              />
+            </div>
           </div>
         </div>
 
-        <div className="kpi-card">
+        <div
+          className="kpi-card"
+          onClick={() => onNavigateTab && onNavigateTab('reports')}
+          style={{ cursor: onNavigateTab ? 'pointer' : 'default' }}
+          title={isFa ? 'برای بررسی گزارشات تخلف کلیک کنید' : 'Click to review reports'}
+        >
           <div className="kpi-icon ruby">
             <ShieldAlert size={26} />
           </div>
@@ -220,10 +270,24 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 ? (isFa ? 'بدون تخلف معلق' : 'Clear queue')
                 : (isFa ? 'نیاز به بررسی سریع' : 'Needs attention')}
             </span>
+            <div className="card-meter">
+              <div
+                className="card-meter-fill"
+                style={{
+                  width: '100%',
+                  background: (stats?.open_reports_count || 0) > 0 ? 'var(--ruby)' : 'var(--emerald)',
+                }}
+              />
+            </div>
           </div>
         </div>
 
-        <div className="kpi-card">
+        <div
+          className="kpi-card"
+          onClick={() => onNavigateTab && onNavigateTab('clans')}
+          style={{ cursor: onNavigateTab ? 'pointer' : 'default' }}
+          title={isFa ? 'برای مدیریت کلن‌ها کلیک کنید' : 'Click to manage clans'}
+        >
           <div className="kpi-icon purple">
             <Flame size={26} />
           </div>
@@ -231,6 +295,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <span className="kpi-label">{isFa ? 'کلن‌های فعال' : 'Active Clans'}</span>
             <span className="kpi-value">{stats?.clans_count || 0}</span>
             <span className="kpi-subtext">{isFa ? 'باشگاه‌های ثبت‌شده' : 'Registered Guilds'}</span>
+            <div className="card-meter">
+              <div
+                className="card-meter-fill"
+                style={{
+                  width: '100%',
+                  background: 'var(--purple)',
+                }}
+              />
+            </div>
           </div>
         </div>
       </div>

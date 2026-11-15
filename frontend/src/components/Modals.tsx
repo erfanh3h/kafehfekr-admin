@@ -22,23 +22,69 @@ import { ApiService } from '../services/api';
 interface UserDetailsModalProps {
   user: UserItem | null;
   onClose: () => void;
+  onSuccess?: () => void;
   lang: 'fa' | 'en';
 }
 
-export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({ user, onClose, lang }) => {
+export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({ user, onClose, onSuccess, lang }) => {
   const isFa = lang === 'fa';
   const [details, setDetails] = useState<UserFullDetails | null>(null);
   const [loading, setLoading] = useState(false);
-  const [tab, setTab] = useState<'stats' | 'games' | 'purchases'>('stats');
+  const [tab, setTab] = useState<'stats' | 'games' | 'purchases' | 'edit'>('stats');
+
+  const [editUsername, setEditUsername] = useState('');
+  const [editPhone, setEditPhone] = useState('');
+  const [editCoin, setEditCoin] = useState(0);
+  const [editScore, setEditScore] = useState(0);
+  const [editXp, setEditXp] = useState(0);
+  const [editIsActive, setEditIsActive] = useState(true);
+  const [savingEdit, setSavingEdit] = useState(false);
 
   useEffect(() => {
     if (!user) return;
+    setEditUsername(user.username || '');
+    setEditPhone(user.phone || '');
+    setEditCoin(user.coin ?? 0);
+    setEditScore(user.score ?? 0);
+    setEditXp(user.xp ?? 0);
+    setEditIsActive(user.is_active !== false);
     setLoading(true);
     ApiService.getUserDetails(user._id)
       .then((d) => setDetails(d))
       .catch((err) => console.error(err))
       .finally(() => setLoading(false));
   }, [user]);
+
+  const handleSaveProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+    setSavingEdit(true);
+    try {
+      await ApiService.updateUser(user._id, {
+        username: editUsername,
+        phone: editPhone,
+        coin: editCoin,
+        score: editScore,
+        xp: editXp,
+        is_active: editIsActive,
+      });
+      user.username = editUsername;
+      user.phone = editPhone;
+      user.coin = editCoin;
+      user.score = editScore;
+      user.xp = editXp;
+      user.is_active = editIsActive;
+      if (details) {
+        details.user = { ...details.user, ...user };
+      }
+      setTab('stats');
+      if (onSuccess) onSuccess();
+    } catch (err: any) {
+      console.error(err);
+    } finally {
+      setSavingEdit(false);
+    }
+  };
 
   if (!user) return null;
 
@@ -96,6 +142,9 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({ user, onClos
             </button>
             <button className={`tab-btn ${tab === 'purchases' ? 'active' : ''}`} onClick={() => setTab('purchases')}>
               {isFa ? 'خریدهای فروشگاه' : 'Purchases'}
+            </button>
+            <button className={`tab-btn ${tab === 'edit' ? 'active' : ''}`} onClick={() => setTab('edit')}>
+              {isFa ? 'ویرایش مشخصات' : 'Edit Profile'}
             </button>
           </div>
 
@@ -192,6 +241,97 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({ user, onClos
                     </table>
                   )}
                 </div>
+              )}
+
+              {tab === 'edit' && (
+                <form onSubmit={handleSaveProfile} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px' }}>
+                    <div className="input-group">
+                      <label>{isFa ? 'نام کاربری' : 'Username'}</label>
+                      <input
+                        type="text"
+                        value={editUsername}
+                        onChange={(e) => setEditUsername(e.target.value)}
+                        placeholder={isFa ? 'نام کاربری جدید...' : 'New username...'}
+                        required
+                      />
+                    </div>
+                    <div className="input-group">
+                      <label>{isFa ? 'شماره تلفن' : 'Phone Number'}</label>
+                      <input
+                        type="text"
+                        value={editPhone}
+                        onChange={(e) => setEditPhone(e.target.value)}
+                        placeholder="09..."
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '12px' }}>
+                    <div className="input-group">
+                      <label>{isFa ? 'موجودی سکه' : 'Coins'}</label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={editCoin}
+                        onChange={(e) => setEditCoin(parseInt(e.target.value) || 0)}
+                      />
+                    </div>
+                    <div className="input-group">
+                      <label>{isFa ? 'امتیاز کاپ' : 'Score / Trophies'}</label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={editScore}
+                        onChange={(e) => setEditScore(parseInt(e.target.value) || 0)}
+                      />
+                    </div>
+                    <div className="input-group">
+                      <label>{isFa ? 'سطح تجربه (XP)' : 'XP'}</label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={editXp}
+                        onChange={(e) => setEditXp(parseInt(e.target.value) || 0)}
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px', background: 'var(--bg-input)', borderRadius: '8px' }}>
+                    <div>
+                      <span style={{ fontWeight: 'bold', display: 'block', color: '#fff' }}>{isFa ? 'وضعیت حساب کاربری' : 'Account Status'}</span>
+                      <span style={{ fontSize: '12px', color: 'var(--text-dim)' }}>
+                        {editIsActive ? (isFa ? 'حساب فعال و مجاز به ورود است' : 'Account is active') : (isFa ? 'حساب مسدود (بن شده) است' : 'Account is suspended')}
+                      </span>
+                    </div>
+                    <label className="switch">
+                      <input
+                        type="checkbox"
+                        checked={editIsActive}
+                        onChange={(e) => setEditIsActive(e.target.checked)}
+                      />
+                      <span className="slider round"></span>
+                    </label>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '10px' }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => setTab('stats')}
+                    >
+                      {isFa ? 'انصراف' : 'Cancel'}
+                    </button>
+                    <button
+                      type="submit"
+                      className="btn btn-primary"
+                      disabled={savingEdit}
+                    >
+                      <Save size={16} />
+                      <span>{savingEdit ? (isFa ? 'در حال ذخیره...' : 'Saving...') : (isFa ? 'ذخیره تغییرات' : 'Save Changes')}</span>
+                    </button>
+                  </div>
+                </form>
               )}
             </>
           )}

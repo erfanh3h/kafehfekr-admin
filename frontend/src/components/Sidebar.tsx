@@ -28,6 +28,7 @@ interface SidebarProps {
   activeTab: NavTab;
   onTabChange: (tab: NavTab) => void;
   currentAdmin: AdminUser | null;
+  reportsBadge?: number;
   lang: 'fa' | 'en';
 }
 
@@ -35,6 +36,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   activeTab,
   onTabChange,
   currentAdmin,
+  reportsBadge,
   lang,
 }) => {
   const isFa = lang === 'fa';
@@ -116,6 +118,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
             >
               <Icon size={18} />
               <span>{item.label}</span>
+              {item.id === 'reports' && reportsBadge !== undefined && reportsBadge > 0 && (
+                <span
+                  className="badge red"
+                  style={{
+                    marginRight: isFa ? 'auto' : undefined,
+                    marginLeft: !isFa ? 'auto' : undefined,
+                    padding: '1px 6px',
+                    fontSize: '11px',
+                    borderRadius: '10px',
+                  }}
+                >
+                  {reportsBadge}
+                </span>
+              )}
             </button>
           );
         })}

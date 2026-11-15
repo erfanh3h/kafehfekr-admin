@@ -33,6 +33,7 @@ export const GamesView: React.FC<GamesViewProps> = ({
   // Live games state
   const [liveGames, setLiveGames] = useState<GamePlayItem[]>([]);
   const [loadingLive, setLoadingLive] = useState(false);
+  const [autoRefreshLive, setAutoRefreshLive] = useState(true);
 
   // History games state
   const [historyGames, setHistoryGames] = useState<GamePlayItem[]>([]);
@@ -82,6 +83,14 @@ export const GamesView: React.FC<GamesViewProps> = ({
     }
   }, [tab, historyPage, selectedGameType, selectedScoreType]);
 
+  useEffect(() => {
+    if (tab !== 'live' || !autoRefreshLive) return;
+    const interval = setInterval(() => {
+      fetchLiveGames();
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [tab, autoRefreshLive]);
+
   const handleTerminateGame = async (gameId: string) => {
     if (!window.confirm(isFa ? `آیا از خاتمه دادن اجباری بازی (${gameId}) اطمینان دارید؟ قفل بازیکنان آزاد خواهد شد.` : `Force terminate match ${gameId}?`)) {
       return;
@@ -125,9 +134,20 @@ export const GamesView: React.FC<GamesViewProps> = ({
               <Radio size={18} style={{ color: 'var(--ruby)' }} />
               <span>{isFa ? 'مسابقات فعال در سرور بازی' : 'Active Live Matches'}</span>
             </span>
-            <button className="btn btn-icon" onClick={fetchLiveGames} title={isFa ? 'تازه‌سازی' : 'Refresh'}>
-              <RefreshCw size={16} className={loadingLive ? 'spin' : ''} />
-            </button>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <button
+                className={`btn ${autoRefreshLive ? 'btn-danger' : 'btn-secondary'}`}
+                style={{ padding: '4px 10px', fontSize: '12px' }}
+                onClick={() => setAutoRefreshLive(!autoRefreshLive)}
+                title={isFa ? 'فعال/غیرفعال‌سازی بروزرسانی خودکار هر ۵ ثانیه' : 'Toggle auto-refresh every 5s'}
+              >
+                <span className={autoRefreshLive ? 'live-dot' : ''}></span>
+                <span>{autoRefreshLive ? (isFa ? 'مانیتورینگ زنده (روشن)' : 'Live Mode (ON)') : (isFa ? 'مانیتورینگ دستی' : 'Manual')}</span>
+              </button>
+              <button className="btn btn-icon" onClick={fetchLiveGames} title={isFa ? 'تازه‌سازی' : 'Refresh'}>
+                <RefreshCw size={16} className={loadingLive ? 'spin' : ''} />
+              </button>
+            </div>
           </div>
 
           <div className="table-responsive">

@@ -70,6 +70,7 @@ def login_admin(username: str, password: str) -> dict:
     sanitized = db.admin_manager._sanitize_admin(admin_doc)
     return {
         "access_token": token,
+        "token": token,
         "token_type": "bearer",
         "admin": sanitized,
     }
@@ -433,7 +434,7 @@ def list_game_history(
     if game_type:
         query["game_types"] = game_type
     if game_score_type:
-        query["game_score_type"] = game_score_type
+        query["game_score_type"] = {"$regex": str(game_score_type).strip(), "$options": "i"}
     if user_id:
         uid = str(user_id)
         query["$or"] = [
@@ -607,8 +608,14 @@ def list_clans(page: int = 1, limit: int = 20, search: Optional[str] = None) -> 
     safe_limit = max(1, min(limit, 100))
     skip = max(0, (page - 1) * safe_limit)
 
-    cursor = db.clans.find(query).sort([("trophies", -1), ("level", -1)]).skip(skip).limit(safe_limit)
-    items = [_clean_doc(c) for c in cursor]
+    cursor = db.clans.find(query).sort([("clan_score", -1), ("clan_level", -1)]).skip(skip).limit(safe_limit)
+    items = []
+    for c in cursor:
+        cleaned = _clean_doc(c)
+        cleaned["level"] = c.get("clan_level") or c.get("level", 1)
+        cleaned["trophies"] = c.get("clan_score") or c.get("trophies", 0)
+        cleaned["owner_id"] = c.get("leader_id") or c.get("creator_id") or c.get("owner_id", "")
+        items.append(cleaned)
 
     return {
         "items": items,
@@ -628,8 +635,13 @@ def get_clan_full_details(clan_id: str) -> dict:
     members = list(db.clan_members.find({"clan_id": cid}))
     challenges = list(db.clan_challenges.find({"clan_id": cid}).sort([("created_at", -1)]).limit(20))
 
+    cleaned_clan = _clean_doc(clan)
+    cleaned_clan["level"] = clan.get("clan_level") or clan.get("level", 1)
+    cleaned_clan["trophies"] = clan.get("clan_score") or clan.get("trophies", 0)
+    cleaned_clan["owner_id"] = clan.get("leader_id") or clan.get("creator_id") or clan.get("owner_id", "")
+
     return {
-        "clan": _clean_doc(clan),
+        "clan": cleaned_clan,
         "members": [_clean_doc(m) for m in members],
         "challenges": [_clean_doc(c) for c in challenges],
     }

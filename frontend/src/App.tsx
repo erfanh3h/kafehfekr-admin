@@ -188,6 +188,7 @@ export const App: React.FC = () => {
           if (tab === 'dashboard') fetchStats();
         }}
         currentAdmin={currentAdmin}
+        reportsBadge={stats?.open_reports_count}
         lang={lang}
       />
 
@@ -210,6 +211,7 @@ export const App: React.FC = () => {
             loading={loadingStats}
             onRefresh={fetchStats}
             onOpenBulkCoins={() => setShowBulkCoinsModal(true)}
+            onNavigateTab={(tab) => setActiveTab(tab)}
             onNotify={addToast}
             lang={lang}
           />
@@ -269,6 +271,10 @@ export const App: React.FC = () => {
       <UserDetailsModal
         user={inspectedUser}
         onClose={() => setInspectedUser(null)}
+        onSuccess={() => {
+          fetchStats();
+          addToast(lang === 'fa' ? 'اطلاعات کاربر با موفقیت بروزرسانی شد.' : 'User updated successfully.', 'success');
+        }}
         lang={lang}
       />
 

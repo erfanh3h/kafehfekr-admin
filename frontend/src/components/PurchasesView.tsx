@@ -9,6 +9,7 @@ import {
   ChevronRight,
   CreditCard,
   Calendar,
+  Download,
 } from 'lucide-react';
 import { PurchaseItem } from '../types';
 import { ApiService } from '../services/api';
@@ -68,6 +69,30 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({ onNotify, lang }) 
     e.preventDefault();
     setPage(1);
     fetchPurchases();
+  };
+
+  const handleExportCsv = () => {
+    if (purchases.length === 0) return;
+    const headers = ['Transaction ID', 'User ID', 'Market', 'Product Pack', 'Coins', 'Token', 'Date'];
+    const rows = purchases.map((p) => [
+      `"${p._id}"`,
+      `"${p.user_id}"`,
+      `"${p.market_type}"`,
+      `"Pack #${p.product_id}"`,
+      PRODUCT_COIN_VALUES[p.product_id] || 0,
+      `"${p.token}"`,
+      `"${p.date ? new Date(p.date).toLocaleString() : ''}"`,
+    ]);
+    const csvContent = '\uFEFF' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `kafefekr_purchases_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    onNotify(isFa ? 'فایل خروجی تراکنش‌ها با موفقیت دانلود شد.' : 'Purchases CSV exported.', 'success');
   };
 
   return (
@@ -140,6 +165,16 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({ onNotify, lang }) 
 
             <button className="btn btn-icon" onClick={fetchPurchases} title={isFa ? 'تازه‌سازی' : 'Refresh'}>
               <RefreshCw size={16} className={loading ? 'spin' : ''} />
+            </button>
+
+            <button
+              className="btn btn-export"
+              style={{ padding: '6px 12px', fontSize: '12px' }}
+              onClick={handleExportCsv}
+              title={isFa ? 'خروجی تراکنش‌ها به صورت فایل CSV' : 'Export Purchases CSV'}
+            >
+              <Download size={14} />
+              <span>{isFa ? 'خروجی CSV' : 'Export CSV'}</span>
             </button>
           </div>
         </div>

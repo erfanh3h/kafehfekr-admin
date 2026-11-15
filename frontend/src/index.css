@@ -722,3 +722,61 @@ input:checked + .slider:before {
   color: var(--gold-primary);
   border-bottom-color: var(--gold-primary);
 }
+
+/* Animations & Modern Accents */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes pulseGlow {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+  70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+}
+
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--ruby);
+  display: inline-block;
+  animation: pulseGlow 1.5s infinite;
+}
+
+.card-meter {
+  height: 6px;
+  background: var(--border-color);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 6px;
+}
+.card-meter-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+.btn-export {
+  background-color: rgba(59, 130, 246, 0.1);
+  color: var(--sapphire);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+.btn-export:hover {
+  background-color: var(--sapphire);
+  color: #fff;
+}
+
+/* Glassmorphic hover effects */
+.panel {
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.panel:hover {
+  border-color: rgba(245, 158, 11, 0.25);
+  box-shadow: 0 6px 25px rgba(0, 0, 0, 0.35);
+}
