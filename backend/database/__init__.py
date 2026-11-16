@@ -29,7 +29,9 @@ class AdminDatabase:
 
     def init_database(self):
         try:
-            self.admin_manager.ensure_default_superadmin()
+            default_user = (os.getenv("DEFAULT_ADMIN_USERNAME") or os.getenv("DEFAULT_ADMIN_USER") or "admin").strip()
+            default_pass = os.getenv("DEFAULT_ADMIN_PASSWORD", "admin123456").strip()
+            self.admin_manager.ensure_default_superadmin(default_user, default_pass)
         except Exception as e:
             print(f"[AdminDatabase] Init notice: {e}")
 

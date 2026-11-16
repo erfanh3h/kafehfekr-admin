@@ -13,7 +13,9 @@ services:
       - PORT=5002
       - HOST=0.0.0.0
       - MONGO_URI=mongodb://mongo:27017/
-      - SECRET_KEY=09da5e74afaa9ma2565c818195b7b9563b93xc059f6f0f4cab6cf63b88e8d3e7
+      - SECRET_KEY=${SECRET_KEY:-09da5e74afaa9ma2565c818195b7b9563b93xc059f6f0f4cab6cf63b88e8d3e7}
+      - DEFAULT_ADMIN_USER=${DEFAULT_ADMIN_USER:-admin}
+      - DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD:-admin123456}
       - BACKUP_DIR=/app/Backups/
     networks:
       - kafehfekr_net

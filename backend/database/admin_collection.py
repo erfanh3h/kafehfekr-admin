@@ -189,7 +189,7 @@ class AdminCollectionManager:
                 permissions=["*"],
                 created_by="system_auto_seed",
             )
-            print(f"[AdminBackend] Default superadmin initialized: username='{default_username}', password='{default_pass}'")
+            print(f"[AdminBackend] Default superadmin initialized: username='{default_username}' (change default password upon first login)")
 
     @staticmethod
     def _sanitize_admin(doc: dict | None) -> dict | None:
