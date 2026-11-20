@@ -1,8 +1,12 @@
+import io
 import os
+import re
 import secrets
+import shutil
 import string
+import zipfile
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from fastapi import HTTPException, status
 from bson import ObjectId
 
@@ -12,6 +16,8 @@ from security import (
     verify_admin_password,
     create_admin_access_token,
 )
+
+BOT_ID_REGEX = "^(bot_|test_bot)"
 
 
 def _clean_doc(doc: Any) -> Any:
@@ -35,9 +41,115 @@ def _clean_doc(doc: Any) -> Any:
     return doc
 
 
+def _escape_regex(value: Optional[str]) -> str:
+    """Safely escapes user input before passing into MongoDB $regex queries."""
+    return re.escape(str(value or "").strip())
+
+
 def generate_log_id() -> str:
     alphabet = string.ascii_letters + string.digits
     return "log_" + "".join(secrets.choice(alphabet) for _ in range(8))
+
+
+def generate_notice_id(prefix: str = "ntf_") -> str:
+    alphabet = string.ascii_letters + string.digits
+    return prefix + "".join(secrets.choice(alphabet) for _ in range(10))
+
+
+def _resolve_usernames(user_ids: List[str]) -> Dict[str, str]:
+    """Batch-resolves user IDs to display usernames to avoid N+1 DB lookups."""
+    unique_ids = list({str(uid) for uid in user_ids if uid})
+    if not unique_ids:
+        return {}
+    try:
+        cursor = db.users.find({"_id": {"$in": unique_ids}}, {"username": 1})
+        return {str(u["_id"]): str(u.get("username") or u["_id"]) for u in cursor}
+    except Exception:
+        return {}
+
+
+def _resolve_admin_usernames(admin_ids: List[str]) -> Dict[str, str]:
+    """Batch-resolves admin IDs to admin usernames."""
+    unique_ids = list({str(aid) for aid in admin_ids if aid})
+    mapping: Dict[str, str] = {
+        "system": "system",
+        "legacy_superadmin": "root",
+    }
+    lookup_ids = [aid for aid in unique_ids if aid not in mapping]
+    if lookup_ids:
+        try:
+            cursor = db.admins_col.find({"_id": {"$in": lookup_ids}}, {"username": 1, "full_name": 1})
+            for a in cursor:
+                mapping[str(a["_id"])] = str(a.get("username") or a.get("full_name") or a["_id"])
+        except Exception:
+            pass
+    return mapping
+
+
+def _extract_match_user_ids(match: dict) -> List[str]:
+    uids: List[str] = []
+    if isinstance(match.get("user_ids"), list):
+        uids.extend(str(u) for u in match["user_ids"] if u)
+    for i in range(1, 5):
+        k = f"user{i}_id"
+        if match.get(k) and str(match[k]) not in uids:
+            uids.append(str(match[k]))
+    if match.get("winner_id") and str(match["winner_id"]) not in uids:
+        uids.append(str(match["winner_id"]))
+    return uids
+
+
+def _format_bytes(size: int) -> str:
+    if size >= 1024 * 1024 * 1024:
+        return f"{size / (1024 * 1024 * 1024):.2f} GB"
+    if size >= 1024 * 1024:
+        return f"{size / (1024 * 1024):.2f} MB"
+    return f"{size / 1024:.2f} KB"
+
+
+def _get_path_size_and_files(path: str) -> Tuple[int, int]:
+    """Recursively calculates real byte size and file count for a file or directory."""
+    if os.path.isfile(path):
+        try:
+            return os.path.getsize(path), 1
+        except OSError:
+            return 0, 0
+    total_size = 0
+    file_count = 0
+    for root, _, filenames in os.walk(path):
+        for fname in filenames:
+            fpath = os.path.join(root, fname)
+            try:
+                total_size += os.path.getsize(fpath)
+                file_count += 1
+            except OSError:
+                pass
+    return total_size, file_count
+
+
+def _safe_backup_path(filename: str) -> str:
+    """Validates a backup filename and returns its canonical path inside BACKUP_DIR."""
+    clean = str(filename or "").strip()
+    if not clean or "/" in clean or "\\" in clean or ".." in clean or clean in (".", ".."):
+        raise HTTPException(status_code=400, detail="نام فایل پشتیبان نامعتبر است.")
+
+    backup_dir = os.path.realpath(os.getenv("BACKUP_DIR", "Backups/"))
+    target_path = os.path.realpath(os.path.join(backup_dir, clean))
+    if not target_path.startswith(backup_dir + os.sep):
+        raise HTTPException(status_code=400, detail="مسیر پشتیبان غیرمجاز است.")
+    if not os.path.exists(target_path):
+        raise HTTPException(status_code=404, detail="فایل پشتیبان یافت نشد.")
+    return target_path
+
+
+def _upsert_config(fields: dict) -> dict:
+    """Safely updates the singleton config document, creating it with _id=1 if missing."""
+    existing = db.config.find_one({})
+    if existing and "_id" in existing:
+        db.config.update_one({"_id": existing["_id"]}, {"$set": fields})
+        return _clean_doc(db.config.find_one({"_id": existing["_id"]}))
+    db.config.update_one({"_id": 1}, {"$set": fields}, upsert=True)
+    return _clean_doc(db.config.find_one({"_id": 1}))
 
 
 # -------------------------------------------------------------
@@ -89,6 +201,7 @@ def change_admin_password(admin_id: str, old_password: str, new_password: str) -
 
     hashed = hash_admin_password(new_password)
     db.admin_manager.update_admin(admin_id, password_hash=hashed)
+    _log_admin_action(admin_id, "change_password", {"admin_id": admin_id})
     return True
 
 
@@ -116,13 +229,20 @@ def create_admin(creator_id: str, data: dict) -> dict:
             permissions=permissions,
             created_by=creator_id,
         )
+        _log_admin_action(creator_id, "create_admin", {
+            "target_admin_id": new_admin.get("_id"),
+            "username": new_admin.get("username"),
+            "role": new_admin.get("role"),
+        })
         return new_admin
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
-def update_admin(admin_id: str, data: dict) -> dict:
+def update_admin(admin_id: str, data: dict, actor_id: str = "") -> dict:
     password = data.get("password")
+    if password is not None and len(str(password)) > 0 and len(str(password)) < 6:
+        raise HTTPException(status_code=400, detail="رمز عبور جدید باید حداقل ۶ کاراکتر باشد.")
     pw_hash = hash_admin_password(password) if password else None
 
     updated = db.admin_manager.update_admin(
@@ -135,15 +255,24 @@ def update_admin(admin_id: str, data: dict) -> dict:
     )
     if not updated:
         raise HTTPException(status_code=404, detail="ادمین یافت نشد.")
+    safe_changes = {k: v for k, v in data.items() if k != "password"}
+    if password:
+        safe_changes["password_reset"] = True
+    _log_admin_action(actor_id, "update_admin", {"target_admin_id": admin_id, "changes": safe_changes})
     return updated
 
 
 def delete_admin(admin_id: str, current_admin_id: str) -> bool:
     if str(admin_id) == str(current_admin_id):
         raise HTTPException(status_code=400, detail="نمی‌توانید حساب کاربری خودتان را حذف کنید.")
+    existing = db.admin_manager.find_by_id(admin_id)
     success = db.admin_manager.delete_admin(admin_id)
     if not success:
         raise HTTPException(status_code=404, detail="ادمین یافت نشد.")
+    _log_admin_action(current_admin_id, "delete_admin", {
+        "target_admin_id": admin_id,
+        "username": existing.get("username") if existing else "",
+    })
     return True
 
 
@@ -151,10 +280,21 @@ def delete_admin(admin_id: str, current_admin_id: str) -> bool:
 # Dashboard & Analytics
 # -------------------------------------------------------------
 
+def _locked_users_query() -> dict:
+    return {
+        "$or": [
+            {"open_game_id": {"$nin": ["", None]}},
+            {"open_pre_game_id": {"$nin": ["", None]}},
+        ]
+    }
+
+
 def get_dashboard_stats() -> dict:
     total_users = db.users.count_documents({})
-    bot_users = db.users.count_documents({"_id": {"$regex": "^(bot_|test_bot)"}})
+    bot_users = db.users.count_documents({"_id": {"$regex": BOT_ID_REGEX}})
     real_users = max(0, total_users - bot_users)
+    banned_users = db.users.count_documents({"is_active": False})
+    locked_users = db.users.count_documents(_locked_users_query())
 
     today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     users_today = db.users.count_documents({"join_date": {"$gte": today_start}})
@@ -172,7 +312,7 @@ def get_dashboard_stats() -> dict:
     open_reports = db.social_reports.count_documents({"status": "open"})
 
     recent_games = list(db.game_play_history.find({}, {"game_types": 1}).sort([("start_date", -1)]).limit(200))
-    game_type_counts = {}
+    game_type_counts: Dict[str, int] = {}
     for g in recent_games:
         for gt in g.get("game_types", []):
             game_type_counts[gt] = game_type_counts.get(gt, 0) + 1
@@ -185,6 +325,8 @@ def get_dashboard_stats() -> dict:
             "real": real_users,
             "bots": bot_users,
             "joined_today": users_today,
+            "banned": banned_users,
+            "locked": locked_users,
         },
         "matches": {
             "total": total_matches,
@@ -202,12 +344,125 @@ def get_dashboard_stats() -> dict:
         "open_reports_count": open_reports,
         "config": {
             "is_queue_open": bool(config.get("is_queue_open", True)),
+            "queue_open_hour": int(config.get("queue_open_hour", 0) or 0),
+            "queue_open_minute": int(config.get("queue_open_minute", 0) or 0),
             "latest_version": config.get("latest_version", "2.0.0"),
             "allowed_version": config.get("allowed_version", "2.0.0"),
             "maintenance_mode": bool(config.get("maintenance_mode", False)),
+            "maintenance_message": config.get("maintenance_message", ""),
             "announcement": config.get("announcement", ""),
+            "announcement_active": bool(config.get("announcement_active", False)),
         },
         "server_time": datetime.now().isoformat(),
+    }
+
+
+def _to_date_key(val: Any) -> Optional[str]:
+    if isinstance(val, datetime):
+        return val.strftime("%Y-%m-%d")
+    if isinstance(val, str) and len(val) >= 10:
+        return val[:10]
+    return None
+
+
+def get_analytics_overview(days: int = 14) -> dict:
+    """Computes daily time-series activity, economy totals, top players, and mode/pack breakdowns."""
+    clamped_days = max(7, min(int(days or 14), 30))
+    now = datetime.now()
+    start_day = (now - timedelta(days=clamped_days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # Pre-seed contiguous daily buckets
+    buckets: Dict[str, Dict[str, Any]] = {}
+    ordered_keys: List[str] = []
+    for i in range(clamped_days):
+        d = start_day + timedelta(days=i)
+        key = d.strftime("%Y-%m-%d")
+        ordered_keys.append(key)
+        buckets[key] = {"date": key, "users": 0, "matches": 0, "purchases": 0}
+
+    # Users joined per day
+    for u in db.users.find({"join_date": {"$gte": start_day}}, {"join_date": 1}):
+        k = _to_date_key(u.get("join_date"))
+        if k in buckets:
+            buckets[k]["users"] += 1
+
+    # Matches played per day
+    for m in db.game_play_history.find({"start_date": {"$gte": start_day}}, {"start_date": 1}):
+        k = _to_date_key(m.get("start_date"))
+        if k in buckets:
+            buckets[k]["matches"] += 1
+
+    # Purchases per day
+    for p in db.purchases.find({"date": {"$gte": start_day}}, {"date": 1}):
+        k = _to_date_key(p.get("date"))
+        if k in buckets:
+            buckets[k]["purchases"] += 1
+
+    daily_series = [buckets[k] for k in ordered_keys]
+
+    # Economy stats for real users
+    real_query = {"_id": {"$not": {"$regex": BOT_ID_REGEX}}}
+    total_coins = 0
+    real_count = 0
+    try:
+        agg = list(db.users.aggregate([
+            {"$match": real_query},
+            {"$group": {"_id": None, "total_coins": {"$sum": {"$ifNull": ["$coin", 0]}}, "count": {"$sum": 1}}},
+        ]))
+        if agg:
+            total_coins = int(agg[0].get("total_coins") or 0)
+            real_count = int(agg[0].get("count") or 0)
+    except Exception:
+        # Fallback if mocked collection doesn't implement aggregate
+        for u in db.users.find(real_query, {"coin": 1}):
+            total_coins += int(u.get("coin") or 0)
+            real_count += 1
+
+    banned_users = db.users.count_documents({"is_active": False})
+    locked_users = db.users.count_documents(_locked_users_query())
+
+    # Top real players by score and coin
+    top_by_score = [
+        _clean_doc(u)
+        for u in db.users.find(
+            real_query,
+            {"username": 1, "score": 1, "coin": 1, "xp": 1, "is_active": 1},
+        ).sort([("score", -1)]).limit(5)
+    ]
+    top_by_coin = [
+        _clean_doc(u)
+        for u in db.users.find(
+            real_query,
+            {"username": 1, "score": 1, "coin": 1, "xp": 1, "is_active": 1},
+        ).sort([("coin", -1)]).limit(5)
+    ]
+
+    # Game mode breakdown (recent 500 matches)
+    mode_counts: Dict[str, int] = {}
+    for g in db.game_play_history.find({}, {"game_score_type": 1}).sort([("start_date", -1)]).limit(500):
+        mode = str(g.get("game_score_type") or "Other")
+        mode_counts[mode] = mode_counts.get(mode, 0) + 1
+
+    # Coin pack breakdown
+    product_counts: Dict[str, int] = {}
+    for p in db.purchases.find({}, {"product_id": 1}).sort([("date", -1)]).limit(1000):
+        pid = str(p.get("product_id") or "unknown")
+        product_counts[pid] = product_counts.get(pid, 0) + 1
+
+    return {
+        "days": clamped_days,
+        "daily_series": daily_series,
+        "economy": {
+            "total_coins": total_coins,
+            "avg_coins_real": round(total_coins / real_count, 1) if real_count > 0 else 0,
+            "real_users": real_count,
+            "banned_users": banned_users,
+            "locked_users": locked_users,
+        },
+        "top_by_score": top_by_score,
+        "top_by_coin": top_by_coin,
+        "mode_breakdown": mode_counts,
+        "product_breakdown": product_counts,
     }
 
 
@@ -223,28 +478,33 @@ def list_users(
     sort_by: str = "join_date",
     sort_order: int = -1,
 ) -> dict:
-    query = {}
+    conditions: List[dict] = []
 
     if filter_type == "bot":
-        query["_id"] = {"$regex": "^(bot_|test_bot)"}
+        conditions.append({"_id": {"$regex": BOT_ID_REGEX}})
     elif filter_type == "real":
-        query["_id"] = {"$not": {"$regex": "^(bot_|test_bot)"}}
+        conditions.append({"_id": {"$not": {"$regex": BOT_ID_REGEX}}})
     elif filter_type == "banned":
-        query["is_active"] = False
+        conditions.append({"is_active": False})
+    elif filter_type == "locked":
+        conditions.append(_locked_users_query())
 
-    if search:
-        s = str(search).strip()
-        search_sub = {
+    if search and str(search).strip():
+        escaped = _escape_regex(search)
+        conditions.append({
             "$or": [
-                {"_id": {"$regex": s, "$options": "i"}},
-                {"username": {"$regex": s, "$options": "i"}},
-                {"phone": {"$regex": s, "$options": "i"}},
+                {"_id": {"$regex": escaped, "$options": "i"}},
+                {"username": {"$regex": escaped, "$options": "i"}},
+                {"phone": {"$regex": escaped, "$options": "i"}},
             ]
-        }
-        if query:
-            query = {"$and": [query, search_sub]}
-        else:
-            query = search_sub
+        })
+
+    if len(conditions) == 0:
+        query: dict = {}
+    elif len(conditions) == 1:
+        query = conditions[0]
+    else:
+        query = {"$and": conditions}
 
     valid_sort_fields = ["join_date", "score", "coin", "xp", "last_time_played", "username"]
     field = sort_by if sort_by in valid_sort_fields else "join_date"
@@ -299,7 +559,7 @@ def get_user_full_details(user_id: str) -> dict:
     }
 
 
-def update_user_profile(user_id: str, updates: dict) -> dict:
+def update_user_profile(user_id: str, updates: dict, admin_id: str = "") -> dict:
     uid = str(user_id)
     existing = db.users.find_one({"_id": uid})
     if not existing:
@@ -323,6 +583,7 @@ def update_user_profile(user_id: str, updates: dict) -> dict:
 
     if upd:
         db.users.find_one_and_update({"_id": uid}, {"$set": upd})
+        _log_admin_action(admin_id, "update_user", {"user_id": uid, "updates": upd})
 
     return _clean_doc(db.users.find_one({"_id": uid}))
 
@@ -376,13 +637,29 @@ def toggle_user_ban(user_id: str, is_active: bool, reason: str = "", admin_id: s
     return {"user_id": uid, "is_active": is_active}
 
 
-def reset_user_locks(user_id: str) -> dict:
+def reset_user_locks(user_id: str, admin_id: str = "") -> dict:
     uid = str(user_id)
     db.users.find_one_and_update(
         {"_id": uid},
         {"$set": {"open_game_id": "", "open_pre_game_id": ""}}
     )
+    _log_admin_action(admin_id, "reset_user_locks", {"user_id": uid})
     return {"user_id": uid, "status": "locks_cleared"}
+
+
+def bulk_reset_locks(user_ids: Optional[List[str]] = None, admin_id: str = "") -> dict:
+    if user_ids:
+        clean_ids = [str(uid) for uid in user_ids if uid]
+        query = {"_id": {"$in": clean_ids}}
+    else:
+        query = _locked_users_query()
+
+    res = db.users.update_many(query, {"$set": {"open_game_id": "", "open_pre_game_id": ""}})
+    _log_admin_action(admin_id, "bulk_reset_locks", {
+        "targeted_count": len(user_ids) if user_ids else "all_locked",
+        "modified_count": res.modified_count,
+    })
+    return {"modified_count": res.modified_count, "matched_count": res.matched_count}
 
 
 def delete_user_account(user_id: str, admin_id: str = "") -> bool:
@@ -395,7 +672,7 @@ def delete_user_account(user_id: str, admin_id: str = "") -> bool:
 def bulk_adjust_coins(amount: int, filter_type: str = "all", reason: str = "", admin_id: str = "") -> dict:
     query = {}
     if filter_type == "real":
-        query["_id"] = {"$not": {"$regex": "^(bot_|test_bot)"}}
+        query["_id"] = {"$not": {"$regex": BOT_ID_REGEX}}
     elif filter_type == "active":
         query["is_active"] = True
 
@@ -417,9 +694,24 @@ def bulk_adjust_coins(amount: int, filter_type: str = "all", reason: str = "", a
 # Games & Matches Management
 # -------------------------------------------------------------
 
+def _attach_player_names(games: List[dict]) -> List[dict]:
+    all_uids: List[str] = []
+    for g in games:
+        all_uids.extend(_extract_match_user_ids(g))
+    name_map = _resolve_usernames(all_uids)
+
+    enriched = []
+    for g in games:
+        doc = _clean_doc(g)
+        uids = _extract_match_user_ids(g)
+        doc["player_names"] = {uid: name_map.get(uid, uid) for uid in uids}
+        enriched.append(doc)
+    return enriched
+
+
 def list_live_games() -> list:
     cursor = db.game_play_history.find({"is_finished": False}).sort([("start_date", -1)]).limit(100)
-    return [_clean_doc(g) for g in cursor]
+    return _attach_player_names(list(cursor))
 
 
 def list_game_history(
@@ -429,14 +721,14 @@ def list_game_history(
     game_score_type: Optional[str] = None,
     user_id: Optional[str] = None,
 ) -> dict:
-    query = {"is_finished": True}
+    query: dict = {"is_finished": True}
 
     if game_type:
         query["game_types"] = game_type
-    if game_score_type:
-        query["game_score_type"] = {"$regex": str(game_score_type).strip(), "$options": "i"}
-    if user_id:
-        uid = str(user_id)
+    if game_score_type and str(game_score_type).strip():
+        query["game_score_type"] = {"$regex": _escape_regex(game_score_type), "$options": "i"}
+    if user_id and str(user_id).strip():
+        uid = str(user_id).strip()
         query["$or"] = [
             {"user_ids": uid},
             {"user1_id": uid},
@@ -448,7 +740,7 @@ def list_game_history(
     skip = max(0, (page - 1) * safe_limit)
 
     cursor = db.game_play_history.find(query).sort([("start_date", -1)]).skip(skip).limit(safe_limit)
-    games = [_clean_doc(g) for g in cursor]
+    games = _attach_player_names(list(cursor))
 
     return {
         "items": games,
@@ -466,8 +758,9 @@ def get_game_play_details(game_play_id: str) -> dict:
         raise HTTPException(status_code=404, detail="بازی یافت نشد.")
 
     rounds = list(db.game_history.find({"game_play_id": gid}).sort([("date", 1)]))
+    enriched_match = _attach_player_names([match])[0]
     return {
-        "match": _clean_doc(match),
+        "match": enriched_match,
         "rounds": [_clean_doc(r) for r in rounds],
     }
 
@@ -483,13 +776,7 @@ def terminate_game_session(game_play_id: str, admin_id: str = "") -> dict:
         {"$set": {"is_finished": True, "finish_date": datetime.now(), "terminated_by_admin": True}}
     )
 
-    user_ids = match.get("user_ids", [])
-    if not user_ids:
-        for i in range(1, 5):
-            k = f"user{i}_id"
-            if match.get(k):
-                user_ids.append(match[k])
-
+    user_ids = _extract_match_user_ids(match)
     if user_ids:
         db.users.update_many(
             {"_id": {"$in": user_ids}, "open_game_id": gid},
@@ -511,7 +798,7 @@ def cleanup_stuck_games(max_age_minutes: int = 120, admin_id: str = "") -> dict:
             {"_id": gid},
             {"$set": {"is_finished": True, "finish_date": datetime.now(), "auto_cleaned": True}}
         )
-        uids = g.get("user_ids", [])
+        uids = _extract_match_user_ids(g)
         if uids:
             db.users.update_many(
                 {"_id": {"$in": uids}, "open_game_id": gid},
@@ -528,31 +815,63 @@ def cleanup_stuck_games(max_age_minutes: int = 120, admin_id: str = "") -> dict:
 
 def get_system_config() -> dict:
     cfg = db.config.find_one({}) or {}
-    return _clean_doc(cfg)
+    cleaned = _clean_doc(cfg)
+    cleaned.setdefault("is_queue_open", True)
+    cleaned.setdefault("queue_open_hour", 0)
+    cleaned.setdefault("queue_open_minute", 0)
+    cleaned.setdefault("latest_version", "2.0.0")
+    cleaned.setdefault("allowed_version", "2.0.0")
+    cleaned.setdefault("maintenance_mode", False)
+    cleaned.setdefault("maintenance_message", "")
+    cleaned.setdefault("announcement", "")
+    cleaned.setdefault("announcement_active", False)
+    return cleaned
 
 
 def set_queue_status(is_open: bool, hour: int = 0, minute: int = 0, admin_id: str = "") -> dict:
-    db.config.find_one_and_update({}, {"$set": {"is_queue_open": bool(is_open)}})
-    _log_admin_action(admin_id, "set_queue_status", {"is_open": is_open, "hour": hour, "minute": minute})
-    return {"is_queue_open": is_open, "hour": hour, "minute": minute}
+    safe_hour = max(0, min(23, int(hour or 0)))
+    safe_minute = max(0, min(59, int(minute or 0)))
+    _upsert_config({
+        "is_queue_open": bool(is_open),
+        "queue_open_hour": safe_hour,
+        "queue_open_minute": safe_minute,
+    })
+    _log_admin_action(admin_id, "set_queue_status", {"is_open": bool(is_open), "hour": safe_hour, "minute": safe_minute})
+    return {"is_queue_open": bool(is_open), "hour": safe_hour, "minute": safe_minute}
 
 
 def set_app_versions(allowed_version: str, latest_version: str, admin_id: str = "") -> dict:
-    db.config.find_one_and_update({}, {"$set": {
-        "allowed_version": str(allowed_version).strip(),
-        "latest_version": str(latest_version).strip(),
-    }})
-    _log_admin_action(admin_id, "set_app_versions", {"allowed": allowed_version, "latest": latest_version})
-    return {"allowed_version": allowed_version, "latest_version": latest_version}
+    clean_allowed = str(allowed_version).strip()
+    clean_latest = str(latest_version).strip()
+    _upsert_config({
+        "allowed_version": clean_allowed,
+        "latest_version": clean_latest,
+    })
+    _log_admin_action(admin_id, "set_app_versions", {"allowed": clean_allowed, "latest": clean_latest})
+    return {"allowed_version": clean_allowed, "latest_version": clean_latest}
 
 
 def set_announcement_banner(announcement: str, is_active: bool = True, admin_id: str = "") -> dict:
-    db.config.find_one_and_update(
-        {},
-        {"$set": {"announcement": str(announcement or "").strip(), "announcement_active": bool(is_active)}}
-    )
-    _log_admin_action(admin_id, "set_announcement", {"announcement": announcement, "is_active": is_active})
-    return {"announcement": announcement, "is_active": is_active}
+    clean_msg = str(announcement or "").strip()
+    _upsert_config({
+        "announcement": clean_msg,
+        "announcement_active": bool(is_active),
+    })
+    _log_admin_action(admin_id, "set_announcement", {"announcement": clean_msg, "is_active": bool(is_active)})
+    return {"announcement": clean_msg, "is_active": bool(is_active)}
+
+
+def set_maintenance_mode(maintenance_mode: bool, maintenance_message: str = "", admin_id: str = "") -> dict:
+    clean_msg = str(maintenance_message or "").strip()
+    _upsert_config({
+        "maintenance_mode": bool(maintenance_mode),
+        "maintenance_message": clean_msg,
+    })
+    _log_admin_action(admin_id, "set_maintenance_mode", {
+        "maintenance_mode": bool(maintenance_mode),
+        "maintenance_message": clean_msg,
+    })
+    return {"maintenance_mode": bool(maintenance_mode), "maintenance_message": clean_msg}
 
 
 # -------------------------------------------------------------
@@ -566,20 +885,27 @@ def list_purchases(
     product_id: Optional[str] = None,
     user_id: Optional[str] = None,
 ) -> dict:
-    query = {}
-    if market_type:
-        query["market_type"] = {"$regex": market_type, "$options": "i"}
-    if product_id:
-        query["product_id"] = str(product_id)
-    if user_id:
-        query["user_id"] = str(user_id)
+    query: dict = {}
+    if market_type and str(market_type).strip():
+        query["market_type"] = {"$regex": _escape_regex(market_type), "$options": "i"}
+    if product_id and str(product_id).strip():
+        query["product_id"] = str(product_id).strip()
+    if user_id and str(user_id).strip():
+        query["user_id"] = str(user_id).strip()
 
     total = db.purchases.count_documents(query)
     safe_limit = max(1, min(limit, 100))
     skip = max(0, (page - 1) * safe_limit)
 
     cursor = db.purchases.find(query).sort([("date", -1)]).skip(skip).limit(safe_limit)
-    items = [_clean_doc(p) for p in cursor]
+    raw_items = list(cursor)
+    name_map = _resolve_usernames([str(p.get("user_id") or "") for p in raw_items])
+    items = []
+    for p in raw_items:
+        doc = _clean_doc(p)
+        uid = str(p.get("user_id") or "")
+        doc["username"] = name_map.get(uid, uid)
+        items.append(doc)
 
     return {
         "items": items,
@@ -595,13 +921,13 @@ def list_purchases(
 # -------------------------------------------------------------
 
 def list_clans(page: int = 1, limit: int = 20, search: Optional[str] = None) -> dict:
-    query = {}
-    if search:
-        s = str(search).strip()
+    query: dict = {}
+    if search and str(search).strip():
+        escaped = _escape_regex(search)
         query["$or"] = [
-            {"name": {"$regex": s, "$options": "i"}},
-            {"tag": {"$regex": s, "$options": "i"}},
-            {"_id": {"$regex": s, "$options": "i"}},
+            {"name": {"$regex": escaped, "$options": "i"}},
+            {"tag": {"$regex": escaped, "$options": "i"}},
+            {"_id": {"$regex": escaped, "$options": "i"}},
         ]
 
     total = db.clans.count_documents(query)
@@ -609,12 +935,18 @@ def list_clans(page: int = 1, limit: int = 20, search: Optional[str] = None) -> 
     skip = max(0, (page - 1) * safe_limit)
 
     cursor = db.clans.find(query).sort([("clan_score", -1), ("clan_level", -1)]).skip(skip).limit(safe_limit)
+    raw_clans = list(cursor)
+    owner_ids = [str(c.get("leader_id") or c.get("creator_id") or c.get("owner_id") or "") for c in raw_clans]
+    owner_names = _resolve_usernames(owner_ids)
+
     items = []
-    for c in cursor:
+    for c in raw_clans:
         cleaned = _clean_doc(c)
-        cleaned["level"] = c.get("clan_level") or c.get("level", 1)
-        cleaned["trophies"] = c.get("clan_score") or c.get("trophies", 0)
-        cleaned["owner_id"] = c.get("leader_id") or c.get("creator_id") or c.get("owner_id", "")
+        owner_id = str(c.get("leader_id") or c.get("creator_id") or c.get("owner_id") or "")
+        cleaned["level"] = c.get("clan_level") if c.get("clan_level") is not None else c.get("level", 1)
+        cleaned["trophies"] = c.get("clan_score") if c.get("clan_score") is not None else c.get("trophies", 0)
+        cleaned["owner_id"] = owner_id
+        cleaned["owner_name"] = owner_names.get(owner_id, c.get("owner_name") or owner_id)
         items.append(cleaned)
 
     return {
@@ -635,14 +967,28 @@ def get_clan_full_details(clan_id: str) -> dict:
     members = list(db.clan_members.find({"clan_id": cid}))
     challenges = list(db.clan_challenges.find({"clan_id": cid}).sort([("created_at", -1)]).limit(20))
 
+    owner_id = str(clan.get("leader_id") or clan.get("creator_id") or clan.get("owner_id") or "")
+    member_uids = [str(m.get("user_id") or "") for m in members]
+    if owner_id:
+        member_uids.append(owner_id)
+    name_map = _resolve_usernames(member_uids)
+
     cleaned_clan = _clean_doc(clan)
-    cleaned_clan["level"] = clan.get("clan_level") or clan.get("level", 1)
-    cleaned_clan["trophies"] = clan.get("clan_score") or clan.get("trophies", 0)
-    cleaned_clan["owner_id"] = clan.get("leader_id") or clan.get("creator_id") or clan.get("owner_id", "")
+    cleaned_clan["level"] = clan.get("clan_level") if clan.get("clan_level") is not None else clan.get("level", 1)
+    cleaned_clan["trophies"] = clan.get("clan_score") if clan.get("clan_score") is not None else clan.get("trophies", 0)
+    cleaned_clan["owner_id"] = owner_id
+    cleaned_clan["owner_name"] = name_map.get(owner_id, clan.get("owner_name") or owner_id)
+
+    cleaned_members = []
+    for m in members:
+        cm = _clean_doc(m)
+        uid = str(m.get("user_id") or "")
+        cm["username"] = m.get("username") or name_map.get(uid, uid)
+        cleaned_members.append(cm)
 
     return {
         "clan": cleaned_clan,
-        "members": [_clean_doc(m) for m in members],
+        "members": cleaned_members,
         "challenges": [_clean_doc(c) for c in challenges],
     }
 
@@ -654,22 +1000,53 @@ def update_clan_info(clan_id: str, updates: dict, admin_id: str = "") -> dict:
         raise HTTPException(status_code=404, detail="کلن یافت نشد.")
 
     upd = {}
-    if "name" in updates and updates["name"]:
+    if "name" in updates and updates["name"] is not None and str(updates["name"]).strip():
         upd["name"] = str(updates["name"]).strip()
-    if "tag" in updates and updates["tag"]:
+    if "tag" in updates and updates["tag"] is not None and str(updates["tag"]).strip():
         upd["tag"] = str(updates["tag"]).strip()
-    if "description" in updates:
+    if "description" in updates and updates["description"] is not None:
         upd["description"] = str(updates["description"]).strip()
     if "level" in updates and updates["level"] is not None:
-        upd["level"] = max(1, int(updates["level"]))
+        lvl = max(1, int(updates["level"]))
+        upd["level"] = lvl
+        upd["clan_level"] = lvl
     if "trophies" in updates and updates["trophies"] is not None:
-        upd["trophies"] = max(0, int(updates["trophies"]))
+        tr = max(0, int(updates["trophies"]))
+        upd["trophies"] = tr
+        upd["clan_score"] = tr
 
     if upd:
         db.clans.find_one_and_update({"_id": cid}, {"$set": upd})
 
     _log_admin_action(admin_id, "update_clan", {"clan_id": cid, "updates": upd})
-    return _clean_doc(db.clans.find_one({"_id": cid}))
+    updated = db.clans.find_one({"_id": cid})
+    cleaned = _clean_doc(updated)
+    if updated:
+        cleaned["level"] = updated.get("clan_level") if updated.get("clan_level") is not None else updated.get("level", 1)
+        cleaned["trophies"] = updated.get("clan_score") if updated.get("clan_score") is not None else updated.get("trophies", 0)
+    return cleaned
+
+
+def remove_clan_member(clan_id: str, user_id: str, admin_id: str = "") -> dict:
+    cid = str(clan_id)
+    uid = str(user_id)
+    clan = db.clans.find_one({"_id": cid})
+    if not clan:
+        raise HTTPException(status_code=404, detail="کلن یافت نشد.")
+
+    res = db.clan_members.delete_many({"clan_id": cid, "user_id": uid})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="عضو مورد نظر در این کلن یافت نشد.")
+
+    remaining = db.clan_members.count_documents({"clan_id": cid})
+    db.clans.update_one({"_id": cid}, {"$set": {"member_count": remaining}})
+    _log_admin_action(admin_id, "remove_clan_member", {
+        "clan_id": cid,
+        "clan_name": clan.get("name"),
+        "user_id": uid,
+        "remaining_members": remaining,
+    })
+    return {"status": "removed", "clan_id": cid, "user_id": uid, "member_count": remaining}
 
 
 def disband_clan(clan_id: str, admin_id: str = "") -> bool:
@@ -703,7 +1080,24 @@ def list_reports(page: int = 1, limit: int = 20, status_filter: Optional[str] = 
     skip = max(0, (page - 1) * safe_limit)
 
     cursor = db.social_reports.find(query).sort([("created_at", -1)]).skip(skip).limit(safe_limit)
-    items = [_clean_doc(r) for r in cursor]
+    raw_items = list(cursor)
+
+    user_ids: List[str] = []
+    for r in raw_items:
+        if r.get("reporter_id"):
+            user_ids.append(str(r["reporter_id"]))
+        if r.get("target_user_id"):
+            user_ids.append(str(r["target_user_id"]))
+    name_map = _resolve_usernames(user_ids)
+
+    items = []
+    for r in raw_items:
+        doc = _clean_doc(r)
+        rep_id = str(r.get("reporter_id") or "")
+        tgt_id = str(r.get("target_user_id") or "")
+        doc["reporter_username"] = name_map.get(rep_id, rep_id)
+        doc["target_username"] = name_map.get(tgt_id, tgt_id)
+        items.append(doc)
 
     return {
         "items": items,
@@ -732,6 +1126,117 @@ def update_report_status(report_id: str, new_status: str, admin_notes: str = "",
 
 
 # -------------------------------------------------------------
+# Admin Notifications & Broadcasts
+# -------------------------------------------------------------
+
+def send_admin_notification(
+    target_type: str,
+    title: str,
+    message: str,
+    user_id: Optional[str] = None,
+    clan_id: Optional[str] = None,
+    admin_id: str = "",
+) -> dict:
+    clean_title = str(title or "").strip()
+    clean_message = str(message or "").strip()
+    if not clean_title or not clean_message:
+        raise HTTPException(status_code=400, detail="عنوان و متن اعلان الزامی است.")
+
+    target_user_ids: List[str] = []
+    target_label = target_type
+
+    if target_type == "user":
+        if not user_id or not str(user_id).strip():
+            raise HTTPException(status_code=400, detail="شناسه کاربر مقصد الزامی است.")
+        uid = str(user_id).strip()
+        user_doc = db.users.find_one({"_id": uid}, {"username": 1})
+        if not user_doc:
+            raise HTTPException(status_code=404, detail="کاربر مقصد یافت نشد.")
+        target_user_ids = [uid]
+        target_label = f"{user_doc.get('username') or uid} ({uid})"
+    elif target_type == "clan":
+        if not clan_id or not str(clan_id).strip():
+            raise HTTPException(status_code=400, detail="شناسه کلن مقصد الزامی است.")
+        cid = str(clan_id).strip()
+        clan_doc = db.clans.find_one({"_id": cid}, {"name": 1})
+        if not clan_doc:
+            raise HTTPException(status_code=404, detail="کلن مقصد یافت نشد.")
+        members = list(db.clan_members.find({"clan_id": cid}, {"user_id": 1}))
+        target_user_ids = list({str(m["user_id"]) for m in members if m.get("user_id")})
+        target_label = f"{clan_doc.get('name') or cid} ({len(target_user_ids)})"
+    elif target_type == "all":
+        cursor = db.users.find(
+            {"_id": {"$not": {"$regex": BOT_ID_REGEX}}, "is_active": {"$ne": False}},
+            {"_id": 1},
+        )
+        target_user_ids = [str(u["_id"]) for u in cursor]
+        target_label = "all_active_players"
+    else:
+        raise HTTPException(status_code=400, detail="نوع هدف نامعتبر است (user / clan / all).")
+
+    now = datetime.now()
+    broadcast_id = generate_notice_id("brc_")
+
+    if target_user_ids:
+        docs = [
+            {
+                "_id": generate_notice_id("ntf_"),
+                "broadcast_id": broadcast_id,
+                "user_id": uid,
+                "title": clean_title,
+                "message": clean_message,
+                "type": "admin_notice",
+                "is_read": False,
+                "status": "unread",
+                "created_at": now,
+                "sent_by": str(admin_id or "system"),
+            }
+            for uid in target_user_ids
+        ]
+        # Insert in batches of 500 to keep MongoDB write payloads safe
+        batch_size = 500
+        for i in range(0, len(docs), batch_size):
+            db.notifications.insert_many(docs[i : i + batch_size])
+
+    broadcast_doc = {
+        "_id": broadcast_id,
+        "target_type": target_type,
+        "target_label": target_label,
+        "user_id": str(user_id).strip() if user_id else None,
+        "clan_id": str(clan_id).strip() if clan_id else None,
+        "title": clean_title,
+        "message": clean_message,
+        "sent_count": len(target_user_ids),
+        "admin_id": str(admin_id or "system"),
+        "created_at": now,
+    }
+    db.admin_broadcasts.insert_one(broadcast_doc)
+
+    _log_admin_action(admin_id, "send_notification", {
+        "broadcast_id": broadcast_id,
+        "target_type": target_type,
+        "target_label": target_label,
+        "sent_count": len(target_user_ids),
+        "title": clean_title,
+    })
+
+    return _clean_doc(broadcast_doc)
+
+
+def list_admin_notifications(limit: int = 30) -> list:
+    safe_limit = max(1, min(int(limit or 30), 100))
+    rows = list(db.admin_broadcasts.find({}).sort([("created_at", -1)]).limit(safe_limit))
+    admin_map = _resolve_admin_usernames([str(r.get("admin_id") or "") for r in rows])
+    items = []
+    for r in rows:
+        doc = _clean_doc(r)
+        aid = str(r.get("admin_id") or "system")
+        doc["admin_username"] = admin_map.get(aid, aid)
+        items.append(doc)
+    return items
+
+
+# -------------------------------------------------------------
 # System Backups & Audit Logs
 # -------------------------------------------------------------
 
@@ -741,17 +1246,39 @@ def trigger_manual_backup(admin_id: str = "") -> dict:
         backup_dir = os.getenv("BACKUP_DIR", "Backups/")
         os.makedirs(backup_dir, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        target_path = os.path.join(backup_dir, f"backup_{timestamp}")
+        target_name = f"backup_{timestamp}"
+        target_path = os.path.join(backup_dir, target_name)
         os.makedirs(target_path, exist_ok=True)
 
-        collections = ["users", "user_history", "game_play_history", "game_history", "config", "purchases", "clans", "admins"]
+        collections = [
+            "users",
+            "user_history",
+            "game_play_history",
+            "game_history",
+            "config",
+            "purchases",
+            "clans",
+            "clan_members",
+            "social_reports",
+            "admins",
+        ]
         for coll_name in collections:
             with open(os.path.join(target_path, f"{coll_name}.bson"), "wb+") as f:
                 for doc in db.db[coll_name].find():
                     f.write(bson.BSON.encode(doc))
 
-        _log_admin_action(admin_id, "manual_backup", {"target": target_path})
-        return {"status": "success", "message": f"پشتیبان‌گیری در {target_path} انجام شد."}
+        size_bytes, file_count = _get_path_size_and_files(target_path)
+        _log_admin_action(admin_id, "manual_backup", {
+            "target": target_name,
+            "size_bytes": size_bytes,
+            "file_count": file_count,
+        })
+        return {
+            "status": "success",
+            "filename": target_name,
+            "size_formatted": _format_bytes(size_bytes),
+            "message": f"پشتیبان‌گیری در {target_name} ({_format_bytes(size_bytes)}) انجام شد.",
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"خطا در پشتیبان‌گیری: {str(e)}")
 
@@ -764,20 +1291,85 @@ def list_system_backups() -> list:
     files = []
     for item in os.listdir(backup_dir):
         full_path = os.path.join(backup_dir, item)
-        stat = os.stat(full_path)
-        size = stat.st_size
-        files.append({
-            "filename": item,
-            "size_bytes": size,
-            "size_formatted": f"{size / (1024*1024):.2f} MB" if size > 1024*1024 else f"{size / 1024:.2f} KB",
-            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-        })
+        try:
+            stat = os.stat(full_path)
+            size, file_count = _get_path_size_and_files(full_path)
+            files.append({
+                "filename": item,
+                "size_bytes": size,
+                "size_formatted": _format_bytes(size),
+                "file_count": file_count,
+                "is_dir": os.path.isdir(full_path),
+                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            })
+        except OSError:
+            continue
     return sorted(files, key=lambda x: x["modified"], reverse=True)
 
 
-def list_audit_logs(limit: int = 50) -> list:
-    cursor = db.audit_logs.find({}).sort([("timestamp", -1)]).limit(limit)
-    return [_clean_doc(doc) for doc in cursor]
+def create_backup_zip_bytes(filename: str) -> Tuple[bytes, str]:
+    target_path = _safe_backup_path(filename)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        if os.path.isfile(target_path):
+            zf.write(target_path, arcname=os.path.basename(target_path))
+        else:
+            base_name = os.path.basename(target_path)
+            for root, _, filenames in os.walk(target_path):
+                for fname in filenames:
+                    full = os.path.join(root, fname)
+                    rel = os.path.relpath(full, target_path)
+                    zf.write(full, arcname=os.path.join(base_name, rel))
+    buf.seek(0)
+    download_name = filename if filename.endswith(".zip") else f"{filename}.zip"
+    return buf.getvalue(), download_name
+
+
+def delete_system_backup(filename: str, admin_id: str = "") -> dict:
+    target_path = _safe_backup_path(filename)
+    try:
+        if os.path.isdir(target_path):
+            shutil.rmtree(target_path)
+        else:
+            os.remove(target_path)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"خطا در حذف فایل پشتیبان: {str(e)}")
+
+    _log_admin_action(admin_id, "delete_backup", {"filename": filename})
+    return {"status": "deleted", "filename": filename}
+
+
+def list_audit_logs(
+    limit: int = 50,
+    action: Optional[str] = None,
+    search: Optional[str] = None,
+) -> list:
+    safe_limit = max(1, min(int(limit or 50), 200))
+    query: dict = {}
+    if action and str(action).strip() and action != "all":
+        query["action"] = str(action).strip()
+
+    # Fetch slightly more if searching inside nested details dict
+    fetch_limit = safe_limit * 3 if (search and str(search).strip()) else safe_limit
+    cursor = db.audit_logs.find(query).sort([("timestamp", -1)]).limit(fetch_limit)
+    rows = list(cursor)
+
+    admin_map = _resolve_admin_usernames([str(r.get("admin_id") or "") for r in rows])
+
+    needle = str(search or "").strip().lower()
+    results = []
+    for doc in rows:
+        cleaned = _clean_doc(doc)
+        aid = str(doc.get("admin_id") or "system")
+        cleaned["admin_username"] = admin_map.get(aid, aid)
+        if needle:
+            haystack = f"{aid} {cleaned['admin_username']} {cleaned.get('action', '')} {cleaned.get('details', '')}".lower()
+            if needle not in haystack:
+                continue
+        results.append(cleaned)
+        if len(results) >= safe_limit:
+            break
+    return results
 
 
 def _log_admin_action(admin_id: str, action: str, details: dict):

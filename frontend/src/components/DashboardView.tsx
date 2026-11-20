@@ -1,395 +1,760 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Users,
   Gamepad2,
   ShoppingBag,
-  ShieldAlert,
-  Flame,
-  Radio,
+  Flag,
   RefreshCw,
   Coins,
-  Database,
-  PlayCircle,
-  AlertTriangle,
-  Clock,
-  CheckCircle,
+  Power,
+  Trash2,
+  DatabaseBackup,
+  ShieldAlert,
+  LockOpen,
+  TrendingUp,
+  Trophy,
+  Wrench,
+  Bell,
 } from 'lucide-react';
-import { DashboardStats } from '../types';
+import {
+  AdminUser,
+  AnalyticsOverview,
+  ConfirmDialogOptions,
+  DashboardStats,
+  LangCode,
+  NavTab,
+  UserItem,
+} from '../types';
 import { ApiService } from '../services/api';
-import { NavTab } from './Sidebar';
+import {
+  computeChartPoints,
+  formatNumber,
+  formatShortDate,
+  hasAdminPermission,
+} from '../utils/adminUtils';
 
 interface DashboardViewProps {
   stats: DashboardStats | null;
   loading: boolean;
+  currentAdmin: AdminUser | null;
   onRefresh: () => void;
   onOpenBulkCoins: () => void;
+  onNavigateTab: (tab: NavTab) => void;
+  onInspectUserById: (userId: string) => void;
+  onConfirm: (opts: ConfirmDialogOptions) => void;
   onNotify: (msg: string, type?: 'success' | 'error' | 'info') => void;
-  onNavigateTab?: (tab: NavTab) => void;
-  lang: 'fa' | 'en';
+  lang: LangCode;
 }
+
+type TrendMetric = 'matches' | 'users' | 'purchases';
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
   stats,
   loading,
+  currentAdmin,
   onRefresh,
   onOpenBulkCoins,
-  onNotify,
   onNavigateTab,
+  onInspectUserById,
+  onConfirm,
+  onNotify,
   lang,
 }) => {
-  const isFa = lang === 'fa';
-  const [cleaningGames, setCleaningGames] = useState(false);
-  const [togglingQueue, setTogglingQueue] = useState(false);
-  const [triggeringBackup, setTriggeringBackup] = useState(false);
+  const [analytics, setAnalytics] = useState<AnalyticsOverview | null>(null);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [days, setDays] = useState<7 | 14 | 30>(14);
+  const [metric, setMetric] = useState<TrendMetric>('matches');
+  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+  const [leaderTab, setLeaderTab] = useState<'score' | 'coin'>('score');
+  const [actionBusy, setActionBusy] = useState<string | null>(null);
 
-  const handleCleanupStuckGames = async () => {
-    if (!window.confirm(isFa ? 'آیا از پاکسازی تمام بازی‌های رهاشده و ناتمام اطمینان دارید؟' : 'Clean up all stuck unfinished matches?')) {
-      return;
-    }
-    setCleaningGames(true);
+  const canWriteConfig = hasAdminPermission(currentAdmin, 'config:write');
+  const canManageGames = hasAdminPermission(currentAdmin, 'games:manage');
+  const canWriteEconomy = hasAdminPermission(currentAdmin, 'economy:write');
+  const canBackup = hasAdminPermission(currentAdmin, 'system:backup');
+  const canWriteUsers = hasAdminPermission(currentAdmin, 'users:write');
+
+  const fetchAnalytics = async (targetDays = days) => {
+    setAnalyticsLoading(true);
     try {
-      const res = await ApiService.cleanupStuckGames();
-      onNotify(isFa ? `تعداد ${res.cleaned_games_count} بازی ناتمام پاکسازی و قفل کاربران آزاد شد.` : `Cleaned ${res.cleaned_games_count} stuck matches.`, 'success');
-      onRefresh();
-    } catch (err: any) {
-      onNotify(err.message, 'error');
+      const res = await ApiService.getAnalytics(targetDays);
+      setAnalytics(res);
+    } catch {
+      // Gracefully keep existing analytics if backend hasn't updated yet
     } finally {
-      setCleaningGames(false);
+      setAnalyticsLoading(false);
     }
+  };
+
+  useEffect(() => {
+    fetchAnalytics(days);
+  }, [days]);
+
+  const handleRefreshAll = () => {
+    onRefresh();
+    fetchAnalytics(days);
   };
 
   const handleToggleQueue = async () => {
     if (!stats) return;
-    const current = stats.config.is_queue_open;
-    setTogglingQueue(true);
+    const nextState = !stats.config.is_queue_open;
+    setActionBusy('queue');
     try {
-      await ApiService.setQueue(!current);
-      onNotify(isFa ? `صف مسابقات ${!current ? 'باز' : 'بسته'} شد.` : `Queue set to ${!current ? 'OPEN' : 'CLOSED'}.`, 'success');
+      await ApiService.setQueue(nextState, stats.config.queue_open_hour || 0, stats.config.queue_open_minute || 0);
+      onNotify(
+        lang === 'fa'
+          ? `صف بازی با موفقیت ${nextState ? 'باز' : 'بسته'} شد.`
+          : `Matchmaking queue is now ${nextState ? 'OPEN' : 'CLOSED'}.`,
+        'success'
+      );
       onRefresh();
     } catch (err: any) {
       onNotify(err.message, 'error');
     } finally {
-      setTogglingQueue(false);
+      setActionBusy(null);
     }
+  };
+
+  const handleCleanupStuck = () => {
+    onConfirm({
+      title: lang === 'fa' ? 'پاکسازی بازی‌های معلق' : 'Cleanup Stuck Matches',
+      message:
+        lang === 'fa'
+          ? 'تمام بازی‌های ناتمامی که بیش از ۲ ساعت از شروع آن‌ها گذشته بسته شده و قفل بازیکنانشان آزاد می‌شود. ادامه می‌دهید؟'
+          : 'All unfinished matches older than 2 hours will be closed and their player locks released. Continue?',
+      variant: 'warning',
+      confirmLabel: lang === 'fa' ? 'اجرای پاکسازی' : 'Run Cleanup',
+      onConfirm: async () => {
+        setActionBusy('cleanup');
+        try {
+          const res = await ApiService.cleanupStuckGames(120);
+          onNotify(
+            lang === 'fa'
+              ? `${res.cleaned_games_count} بازی معلق پاکسازی شد.`
+              : `Cleaned ${res.cleaned_games_count} stuck matches.`,
+            'success'
+          );
+          handleRefreshAll();
+        } catch (err: any) {
+          onNotify(err.message, 'error');
+        } finally {
+          setActionBusy(null);
+        }
+      },
+    });
+  };
+
+  const handleUnlockAllStuckPlayers = () => {
+    onConfirm({
+      title: lang === 'fa' ? 'رفع قفل همه بازیکنان گیرکرده' : 'Release All Stuck Players',
+      message:
+        lang === 'fa'
+          ? 'قفل بازی (open_game_id و open_pre_game_id) برای تمام بازیکنانی که در حالت گیرکرده هستند پاک می‌شود. آیا مطمئن هستید؟'
+          : 'This will clear open_game_id and open_pre_game_id for all currently locked players. Continue?',
+      variant: 'warning',
+      confirmLabel: lang === 'fa' ? 'رفع قفل گروهی' : 'Release Locks',
+      onConfirm: async () => {
+        setActionBusy('unlock');
+        try {
+          const res = await ApiService.bulkResetLocks();
+          onNotify(
+            lang === 'fa'
+              ? `قفل ${res.modified_count} بازیکن با موفقیت آزاد شد.`
+              : `Released locks for ${res.modified_count} players.`,
+            'success'
+          );
+          handleRefreshAll();
+        } catch (err: any) {
+          onNotify(err.message, 'error');
+        } finally {
+          setActionBusy(null);
+        }
+      },
+    });
   };
 
   const handleTriggerBackup = async () => {
-    setTriggeringBackup(true);
+    setActionBusy('backup');
     try {
       const res = await ApiService.triggerBackup();
-      onNotify(isFa ? res.message : 'Database backup completed.', 'success');
+      onNotify(res.message || (lang === 'fa' ? 'پشتیبان‌گیری انجام شد.' : 'Backup created.'), 'success');
     } catch (err: any) {
       onNotify(err.message, 'error');
     } finally {
-      setTriggeringBackup(false);
+      setActionBusy(null);
     }
   };
 
-  if (loading && !stats) {
-    return (
-      <div className="page-container" style={{ alignItems: 'center', justifyContent: 'center', minHeight: '400px' }}>
-        <RefreshCw size={32} className="spin" style={{ color: 'var(--gold-primary)' }} />
-        <p style={{ marginTop: '12px', color: 'var(--text-muted)' }}>
-          {isFa ? 'در حال بارگذاری اطلاعات داشبورد...' : 'Loading dashboard metrics...'}
-        </p>
-      </div>
-    );
-  }
+  const series = analytics?.daily_series || [];
+  const metricValues = series.map((pt) => pt[metric]);
+  const chartW = 640;
+  const chartH = 200;
+  const { points, maxVal, linePath, areaPath } = computeChartPoints(metricValues, chartW, chartH, 16, 16);
 
-  const breakdown = stats?.matches.breakdown || {};
-  const sortedGames = Object.entries(breakdown).sort((a, b) => b[1] - a[1]);
+  const metricColor =
+    metric === 'matches' ? 'var(--accent)' : metric === 'users' ? 'var(--sapphire)' : 'var(--emerald)';
+  const metricSum = metricValues.reduce((acc, v) => acc + v, 0);
+  const activePoint = hoveredIdx !== null && series[hoveredIdx] ? series[hoveredIdx] : series[series.length - 1];
+
+  const gameBreakdown = Object.entries(stats?.matches.breakdown || {}).sort((a, b) => b[1] - a[1]);
+  const totalGameTypeHits = gameBreakdown.reduce((acc, [, c]) => acc + c, 0) || 1;
+
+  const modeBreakdown = Object.entries(analytics?.mode_breakdown || {}).sort((a, b) => b[1] - a[1]);
+  const totalModes = modeBreakdown.reduce((acc, [, c]) => acc + c, 0) || 1;
+
+  const lockedUsersCount = stats?.users.locked ?? analytics?.economy.locked_users ?? 0;
+  const leaders = leaderTab === 'score' ? analytics?.top_by_score || [] : analytics?.top_by_coin || [];
 
   return (
-    <div className="page-container">
-      {/* Top Banner & Quick Controls */}
-      <div
-        className="panel"
-        style={{
-          background: 'linear-gradient(135deg, rgba(20, 27, 45, 0.95), rgba(15, 21, 35, 0.95))',
-          borderColor: 'var(--border-light)',
-        }}
-      >
-        <div className="panel-body" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <h2 style={{ fontSize: '20px', color: '#fff', fontWeight: 'bold' }}>
-                {isFa ? 'مرکز مدیریت و عملیات کافه فکر' : 'Cafe Fekr Operations Center'}
-              </h2>
-              <span className={`badge ${stats?.config.is_queue_open ? 'green' : 'red'}`}>
-                {stats?.config.is_queue_open ? (isFa ? 'صف فعال' : 'Queue Open') : (isFa ? 'صف مسدود' : 'Queue Closed')}
-              </span>
-            </div>
-            <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '4px' }}>
-              {isFa
-                ? `نسخه مجاز اپلیکیشن: ${stats?.config.allowed_version || '2.0.0'} | زمان سرور: ${stats?.server_time ? new Date(stats.server_time).toLocaleTimeString() : ''}`
-                : `Allowed Version: ${stats?.config.allowed_version || '2.0.0'} | Server Time: ${stats?.server_time || ''}`}
-            </p>
-          </div>
-
-          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-            <button
-              className={`btn ${stats?.config.is_queue_open ? 'btn-danger' : 'btn-success'}`}
-              onClick={handleToggleQueue}
-              disabled={togglingQueue}
-            >
-              <Radio size={16} />
-              <span>
-                {stats?.config.is_queue_open
-                  ? (isFa ? 'بستن اضطراری صف' : 'Emergency Close Queue')
-                  : (isFa ? 'باز کردن صف' : 'Open Match Queue')}
-              </span>
+    <div className="page-body">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">
+            {lang === 'fa' ? 'داشبورد و تحلیل عملکرد' : 'Operations Overview'}
+          </h1>
+          <p className="page-subtitle">
+            {lang === 'fa'
+              ? 'پایش زنده بازیکنان، اقتصاد سکه، روند مسابقات و وضعیت سرویس‌های کافه فکر'
+              : 'Live player metrics, coin economy, match trends, and core system controls'}
+          </p>
+        </div>
+        <div className="header-actions">
+          {canWriteEconomy && (
+            <button type="button" className="btn btn-primary" onClick={onOpenBulkCoins}>
+              <Coins size={15} />
+              <span>{lang === 'fa' ? 'توزیع همگانی سکه' : 'Bulk Grant Coins'}</span>
             </button>
-
-            <button
-              className="btn btn-secondary"
-              onClick={handleCleanupStuckGames}
-              disabled={cleaningGames}
-            >
-              <AlertTriangle size={16} />
-              <span>{isFa ? 'پاکسازی بازی‌های گیرکرده' : 'Clean Stuck Games'}</span>
-            </button>
-
-            <button className="btn btn-primary" onClick={onOpenBulkCoins}>
-              <Coins size={16} />
-              <span>{isFa ? 'اهدای سکه همگانی' : 'Gift Coins'}</span>
-            </button>
-
-            <button
-              className="btn btn-secondary"
-              onClick={handleTriggerBackup}
-              disabled={triggeringBackup}
-            >
-              <Database size={16} />
-              <span>{isFa ? 'پشتیبان‌گیری فوری' : 'Backup DB'}</span>
-            </button>
-
-            <button className="btn btn-icon" onClick={onRefresh} title={isFa ? 'تازه‌سازی' : 'Refresh'}>
-              <RefreshCw size={16} />
-            </button>
-          </div>
+          )}
+          <button type="button" className="btn btn-secondary" onClick={handleRefreshAll} disabled={loading}>
+            <RefreshCw size={15} className={loading || analyticsLoading ? 'spin' : ''} />
+            <span>{lang === 'fa' ? 'بروزرسانی' : 'Refresh'}</span>
+          </button>
         </div>
       </div>
 
-      {/* KPI Cards Grid */}
-      <div className="kpi-grid">
-        <div
-          className="kpi-card"
-          onClick={() => onNavigateTab && onNavigateTab('users')}
-          style={{ cursor: onNavigateTab ? 'pointer' : 'default' }}
-          title={isFa ? 'برای مدیریت کاربران کلیک کنید' : 'Click to manage users'}
-        >
-          <div className="kpi-icon sapphire">
-            <Users size={26} />
-          </div>
-          <div className="kpi-details">
-            <span className="kpi-label">{isFa ? 'کل بازیکنان ثبت‌شده' : 'Total Players'}</span>
-            <span className="kpi-value">{stats?.users.total.toLocaleString() || 0}</span>
-            <span className="kpi-subtext">
-              {isFa ? `${stats?.users.real || 0} کاربر واقعی | ${stats?.users.bots || 0} ربات` : `${stats?.users.real || 0} Real`}
-            </span>
-            <div className="card-meter">
-              <div
-                className="card-meter-fill"
-                style={{
-                  width: `${stats?.users.total ? Math.min(100, Math.round(((stats.users.real || 0) / stats.users.total) * 100)) : 100}%`,
-                  background: 'var(--sapphire)',
-                }}
-              />
+      {/* Conditional Operational Alerts */}
+      {stats?.config.maintenance_mode && (
+        <div className="alert-banner danger">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <Wrench size={18} className="text-crimson" />
+            <div>
+              <strong style={{ fontSize: 13.5 }}>
+                {lang === 'fa' ? 'حالت تعمیرات فعال است' : 'Maintenance Mode is Active'}
+              </strong>
+              {stats.config.maintenance_message && (
+                <div className="text-secondary" style={{ fontSize: 12.5 }}>
+                  {stats.config.maintenance_message}
+                </div>
+              )}
             </div>
           </div>
+          <button type="button" className="btn btn-secondary btn-sm" onClick={() => onNavigateTab('config')}>
+            {lang === 'fa' ? 'مدیریت در تنظیمات' : 'Manage in Config'}
+          </button>
         </div>
+      )}
 
-        <div
-          className="kpi-card"
-          onClick={() => onNavigateTab && onNavigateTab('games')}
-          style={{ cursor: onNavigateTab ? 'pointer' : 'default' }}
-          title={isFa ? 'برای مشاهده مسابقات کلیک کنید' : 'Click to view matches'}
-        >
-          <div className="kpi-icon gold">
-            <Gamepad2 size={26} />
-          </div>
-          <div className="kpi-details">
-            <span className="kpi-label">{isFa ? 'کل مسابقات برگزارشده' : 'Total Matches'}</span>
-            <span className="kpi-value">{stats?.matches.total.toLocaleString() || 0}</span>
-            <span className="kpi-subtext">
-              {isFa ? `${stats?.matches.live || 0} مسابقه زنده | ${stats?.matches.finished || 0} پایان‌یافته` : `${stats?.matches.live || 0} Live`}
-            </span>
-            <div className="card-meter">
-              <div
-                className="card-meter-fill"
-                style={{
-                  width: `${stats?.matches.total ? Math.min(100, Math.round(((stats.matches.finished || 0) / stats.matches.total) * 100)) : 100}%`,
-                  background: 'var(--gold-primary)',
-                }}
-              />
+      {lockedUsersCount > 0 && (
+        <div className="alert-banner warning">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <ShieldAlert size={18} className="text-amber" />
+            <div style={{ fontSize: 13 }}>
+              <strong>{formatNumber(lockedUsersCount, lang)}</strong>{' '}
+              {lang === 'fa'
+                ? 'بازیکن دارای قفل فعال بازی هستند (احتمال گیر کردن در صف یا بازی قدیمی).'
+                : 'players currently have active match locks (possible stuck sessions).'}
             </div>
           </div>
-        </div>
-
-        <div
-          className="kpi-card"
-          onClick={() => onNavigateTab && onNavigateTab('purchases')}
-          style={{ cursor: onNavigateTab ? 'pointer' : 'default' }}
-          title={isFa ? 'برای مشاهده تراکنش‌ها کلیک کنید' : 'Click to view store transactions'}
-        >
-          <div className="kpi-icon emerald">
-            <ShoppingBag size={26} />
-          </div>
-          <div className="kpi-details">
-            <span className="kpi-label">{isFa ? 'تراکنش‌های درون‌برنامه‌ای' : 'Total Purchases'}</span>
-            <span className="kpi-value">{stats?.purchases.total.toLocaleString() || 0}</span>
-            <span className="kpi-subtext">
-              {isFa ? `بازار: ${stats?.purchases.bazaar || 0} | مایکت: ${stats?.purchases.myket || 0}` : `Bazaar: ${stats?.purchases.bazaar || 0}`}
-            </span>
-            <div className="card-meter">
-              <div
-                className="card-meter-fill"
-                style={{
-                  width: `${stats?.purchases.total ? Math.min(100, Math.round(((stats.purchases.bazaar || 0) / stats.purchases.total) * 100)) : 100}%`,
-                  background: 'var(--emerald)',
-                }}
-              />
-            </div>
-          </div>
-        </div>
-
-        <div
-          className="kpi-card"
-          onClick={() => onNavigateTab && onNavigateTab('reports')}
-          style={{ cursor: onNavigateTab ? 'pointer' : 'default' }}
-          title={isFa ? 'برای بررسی گزارشات تخلف کلیک کنید' : 'Click to review reports'}
-        >
-          <div className="kpi-icon ruby">
-            <ShieldAlert size={26} />
-          </div>
-          <div className="kpi-details">
-            <span className="kpi-label">{isFa ? 'گزارش‌های باز تخلف' : 'Open Reports'}</span>
-            <span className="kpi-value">{stats?.open_reports_count || 0}</span>
-            <span className="kpi-subtext">
-              {stats?.open_reports_count === 0
-                ? (isFa ? 'بدون تخلف معلق' : 'Clear queue')
-                : (isFa ? 'نیاز به بررسی سریع' : 'Needs attention')}
-            </span>
-            <div className="card-meter">
-              <div
-                className="card-meter-fill"
-                style={{
-                  width: '100%',
-                  background: (stats?.open_reports_count || 0) > 0 ? 'var(--ruby)' : 'var(--emerald)',
-                }}
-              />
-            </div>
-          </div>
-        </div>
-
-        <div
-          className="kpi-card"
-          onClick={() => onNavigateTab && onNavigateTab('clans')}
-          style={{ cursor: onNavigateTab ? 'pointer' : 'default' }}
-          title={isFa ? 'برای مدیریت کلن‌ها کلیک کنید' : 'Click to manage clans'}
-        >
-          <div className="kpi-icon purple">
-            <Flame size={26} />
-          </div>
-          <div className="kpi-details">
-            <span className="kpi-label">{isFa ? 'کلن‌های فعال' : 'Active Clans'}</span>
-            <span className="kpi-value">{stats?.clans_count || 0}</span>
-            <span className="kpi-subtext">{isFa ? 'باشگاه‌های ثبت‌شده' : 'Registered Guilds'}</span>
-            <div className="card-meter">
-              <div
-                className="card-meter-fill"
-                style={{
-                  width: '100%',
-                  background: 'var(--purple)',
-                }}
-              />
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Game Popularity Breakdown & System Health */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '20px' }}>
-        {/* Game Types Breakdown */}
-        <div className="panel">
-          <div className="panel-header">
-            <span className="panel-title">
-              <Gamepad2 size={18} style={{ color: 'var(--gold-primary)' }} />
-              <span>{isFa ? 'محبوبیت بازی‌ها (۲۰۰ مسابقه اخیر)' : 'Recent Game Distribution'}</span>
-            </span>
-            <span className="badge gold">{sortedGames.length} {isFa ? 'بازی فعال' : 'Active Games'}</span>
-          </div>
-          <div className="panel-body">
-            {sortedGames.length === 0 ? (
-              <p style={{ color: 'var(--text-dim)', textAlign: 'center', padding: '20px' }}>
-                {isFa ? 'هنوز داده‌ای برای مسابقات ثبت نشده است.' : 'No match data yet.'}
-              </p>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                {sortedGames.slice(0, 8).map(([gameName, count]) => {
-                  const maxCount = sortedGames[0][1] || 1;
-                  const percent = Math.round((count / maxCount) * 100);
-                  return (
-                    <div key={gameName} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
-                        <span style={{ fontWeight: '600', color: '#fff' }}>{gameName}</span>
-                        <span style={{ color: 'var(--text-muted)' }}>{count} {isFa ? 'دست' : 'matches'}</span>
-                      </div>
-                      <div style={{ height: '8px', background: 'var(--border-color)', borderRadius: '4px', overflow: 'hidden' }}>
-                        <div
-                          style={{
-                            height: '100%',
-                            width: `${percent}%`,
-                            background: 'linear-gradient(90deg, #f59e0b, #eab308)',
-                            borderRadius: '4px',
-                          }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => onNavigateTab('users')}>
+              {lang === 'fa' ? 'بررسی در بازیکنان' : 'Inspect Players'}
+            </button>
+            {canWriteUsers && (
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={handleUnlockAllStuckPlayers}
+                disabled={actionBusy === 'unlock'}
+              >
+                <LockOpen size={14} />
+                <span>{lang === 'fa' ? 'رفع قفل همه' : 'Release All'}</span>
+              </button>
             )}
           </div>
         </div>
+      )}
 
-        {/* System & Operations Snapshot */}
-        <div className="panel">
-          <div className="panel-header">
-            <span className="panel-title">
-              <Radio size={18} style={{ color: 'var(--emerald)' }} />
-              <span>{isFa ? 'وضعیت پلتفرم و قوانین اجرایی' : 'Platform & Policy Status'}</span>
+      {/* Executive KPI Strip */}
+      <div className="kpi-grid">
+        <div className="kpi-card clickable" onClick={() => onNavigateTab('users')}>
+          <div className="kpi-top">
+            <span>{lang === 'fa' ? 'کل بازیکنان' : 'Total Players'}</span>
+            <span className="kpi-icon sapphire">
+              <Users size={16} />
             </span>
           </div>
-          <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '10px', borderBottom: '1px solid var(--border-color)' }}>
-              <span style={{ color: 'var(--text-muted)', fontSize: '13px' }}>{isFa ? 'وضعیت ورود به صف رنک:' : 'Rank Matchmaking Queue:'}</span>
-              <span className={`badge ${stats?.config.is_queue_open ? 'green' : 'red'}`}>
-                {stats?.config.is_queue_open ? (isFa ? 'مجاز و در دسترس' : 'Online & Open') : (isFa ? 'مسدود شده توسط مدیر' : 'Closed')}
-              </span>
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '10px', borderBottom: '1px solid var(--border-color)' }}>
-              <span style={{ color: 'var(--text-muted)', fontSize: '13px' }}>{isFa ? 'حداقل نسخه مجاز کلاینت (گودوت):' : 'Allowed Client Version:'}</span>
-              <span className="badge blue">{stats?.config.allowed_version || '2.0.0'}</span>
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '10px', borderBottom: '1px solid var(--border-color)' }}>
-              <span style={{ color: 'var(--text-muted)', fontSize: '13px' }}>{isFa ? 'جدیدترین نسخه منتشرشده:' : 'Latest Version:'}</span>
-              <span className="badge gold">{stats?.config.latest_version || '2.0.0'}</span>
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '10px', borderBottom: '1px solid var(--border-color)' }}>
-              <span style={{ color: 'var(--text-muted)', fontSize: '13px' }}>{isFa ? 'پایگاه داده اصلی:' : 'Database Engine:'}</span>
-              <span className="badge green">MongoDB 7.0 (KafehFekrDB)</span>
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ color: 'var(--text-muted)', fontSize: '13px' }}>{isFa ? 'موتور مسابقات بیدرنگ (Realtime):' : 'Realtime Engine:'}</span>
-              <span className="badge sapphire">Socket.IO ASGI (Port 5000)</span>
-            </div>
+          <div className="kpi-value">{formatNumber(stats?.users.total, lang)}</div>
+          <div className="kpi-foot">
+            <span>{formatNumber(stats?.users.real, lang)} {lang === 'fa' ? 'واقعی' : 'real'}</span>
+            <span className="meta-sep">·</span>
+            <span className="text-emerald">+{formatNumber(stats?.users.joined_today, lang)} {lang === 'fa' ? 'امروز' : 'today'}</span>
           </div>
         </div>
+
+        <div className="kpi-card clickable" onClick={() => onNavigateTab('games')}>
+          <div className="kpi-top">
+            <span>{lang === 'fa' ? 'مسابقات زنده' : 'Live Matches'}</span>
+            <span className="kpi-icon emerald">
+              <Gamepad2 size={16} />
+            </span>
+          </div>
+          <div className="kpi-value">{formatNumber(stats?.matches.live, lang)}</div>
+          <div className="kpi-foot">
+            <span>{formatNumber(stats?.matches.today, lang)} {lang === 'fa' ? 'امروز' : 'today'}</span>
+            <span className="meta-sep">·</span>
+            <span>{formatNumber(stats?.matches.total, lang)} {lang === 'fa' ? 'کل' : 'total'}</span>
+          </div>
+        </div>
+
+        <div className="kpi-card clickable" onClick={() => onNavigateTab('purchases')}>
+          <div className="kpi-top">
+            <span>{lang === 'fa' ? 'تراکنش‌های موفق' : 'Store Purchases'}</span>
+            <span className="kpi-icon accent">
+              <ShoppingBag size={16} />
+            </span>
+          </div>
+          <div className="kpi-value">{formatNumber(stats?.purchases.total, lang)}</div>
+          <div className="kpi-foot">
+            <span>{lang === 'fa' ? 'بازار' : 'Bazaar'} {formatNumber(stats?.purchases.bazaar, lang)}</span>
+            <span className="meta-sep">·</span>
+            <span>{lang === 'fa' ? 'مایکت' : 'Myket'} {formatNumber(stats?.purchases.myket, lang)}</span>
+          </div>
+        </div>
+
+        <div className="kpi-card clickable" onClick={() => onNavigateTab('reports')}>
+          <div className="kpi-top">
+            <span>{lang === 'fa' ? 'گزارش‌های باز' : 'Open Reports'}</span>
+            <span className={`kpi-icon ${(stats?.open_reports_count || 0) > 0 ? 'crimson' : ''}`}>
+              <Flag size={16} />
+            </span>
+          </div>
+          <div className="kpi-value">{formatNumber(stats?.open_reports_count, lang)}</div>
+          <div className="kpi-foot">
+            <span>{formatNumber(stats?.clans_count, lang)} {lang === 'fa' ? 'کلن فعال' : 'active clans'}</span>
+            <span className="meta-sep">·</span>
+            <span className="mono">v{stats?.config.latest_version || '—'}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Row: Daily Activity Trend Chart + Operations Panel */}
+      <div className="dash-grid-main">
+        <section className="card">
+          <div className="card-header" style={{ flexWrap: 'wrap' }}>
+            <div className="card-title">
+              <TrendingUp size={16} className="text-accent" />
+              <span>{lang === 'fa' ? 'روند فعالیت روزانه' : 'Daily Activity Trend'}</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <div className="segmented" role="tablist">
+                {(['matches', 'users', 'purchases'] as TrendMetric[]).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    role="tab"
+                    aria-selected={metric === m}
+                    className={`segmented-btn ${metric === m ? 'active' : ''}`}
+                    onClick={() => setMetric(m)}
+                  >
+                    {m === 'matches'
+                      ? lang === 'fa' ? 'مسابقات' : 'Matches'
+                      : m === 'users'
+                      ? lang === 'fa' ? 'ثبت‌نام' : 'Signups'
+                      : lang === 'fa' ? 'خریدها' : 'Sales'}
+                  </button>
+                ))}
+              </div>
+              <div className="segmented">
+                {([7, 14, 30] as const).map((d) => (
+                  <button
+                    key={d}
+                    type="button"
+                    className={`segmented-btn ${days === d ? 'active' : ''}`}
+                    onClick={() => setDays(d)}
+                  >
+                    {d}{lang === 'fa' ? 'روز' : 'd'}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="chart-tooltip-bar">
+            <div className="meta-inline">
+              <span>{lang === 'fa' ? 'مجموع بازه:' : 'Period total:'}</span>
+              <strong className="tabular-nums" style={{ color: 'var(--text-primary)' }}>
+                {formatNumber(metricSum, lang)}
+              </strong>
+              <span className="meta-sep">·</span>
+              <span>{lang === 'fa' ? 'بیشترین روز:' : 'Peak day:'}</span>
+              <strong className="tabular-nums" style={{ color: 'var(--text-primary)' }}>
+                {formatNumber(maxVal, lang)}
+              </strong>
+            </div>
+            {activePoint && (
+              <div className="meta-inline">
+                <span className="tabular-nums">{formatShortDate(activePoint.date, lang)}</span>
+                <span className="meta-sep">·</span>
+                <strong className="tabular-nums" style={{ color: metricColor }}>
+                  {formatNumber(activePoint[metric], lang)}
+                </strong>
+              </div>
+            )}
+          </div>
+
+          <div className="chart-shell">
+            {analyticsLoading && series.length === 0 ? (
+              <div style={{ height: 210, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <div className="skeleton" style={{ width: '100%', height: 160 }} />
+              </div>
+            ) : series.length === 0 ? (
+              <div className="empty-state" style={{ padding: '48px 16px' }}>
+                <span>{lang === 'fa' ? 'داده‌ای برای این بازه ثبت نشده است.' : 'No activity data for this period.'}</span>
+              </div>
+            ) : (
+              <>
+                <svg
+                  viewBox={`0 0 ${chartW} ${chartH}`}
+                  className="chart-svg"
+                  onMouseLeave={() => setHoveredIdx(null)}
+                >
+                  <defs>
+                    <linearGradient id="trendGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={metricColor} stopOpacity="0.28" />
+                      <stop offset="100%" stopColor={metricColor} stopOpacity="0.01" />
+                    </linearGradient>
+                  </defs>
+                  {[0.25, 0.5, 0.75, 1].map((ratio) => {
+                    const y = 16 + (chartH - 32) * ratio;
+                    return (
+                      <line
+                        key={ratio}
+                        x1={16}
+                        x2={chartW - 16}
+                        y1={y}
+                        y2={y}
+                        className="chart-grid-line"
+                      />
+                    );
+                  })}
+                  {areaPath && <path d={areaPath} fill="url(#trendGrad)" />}
+                  {linePath && (
+                    <path
+                      d={linePath}
+                      fill="none"
+                      stroke={metricColor}
+                      strokeWidth="2.4"
+                      strokeLinejoin="round"
+                      strokeLinecap="round"
+                    />
+                  )}
+                  {points.map((pt) => {
+                    const isHover = hoveredIdx === pt.index;
+                    return (
+                      <g key={pt.index}>
+                        <rect
+                          x={pt.x - 16}
+                          y={0}
+                          width={32}
+                          height={chartH}
+                          fill="transparent"
+                          style={{ cursor: 'pointer' }}
+                          onMouseEnter={() => setHoveredIdx(pt.index)}
+                        />
+                        <circle
+                          cx={pt.x}
+                          cy={pt.y}
+                          r={isHover ? 5 : 3}
+                          fill={isHover ? metricColor : 'var(--bg-surface)'}
+                          stroke={metricColor}
+                          strokeWidth="2"
+                        />
+                      </g>
+                    );
+                  })}
+                </svg>
+                <div className="chart-x-labels">
+                  <span>{formatShortDate(series[0]?.date, lang)}</span>
+                  <span>{formatShortDate(series[Math.floor(series.length / 2)]?.date, lang)}</span>
+                  <span>{formatShortDate(series[series.length - 1]?.date, lang)}</span>
+                </div>
+              </>
+            )}
+          </div>
+        </section>
+
+        {/* Quick Controls & Economy Summary */}
+        <section className="card" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div className="card-header" style={{ marginBottom: 0 }}>
+            <div className="card-title">
+              <Power size={16} className="text-accent" />
+              <span>{lang === 'fa' ? 'کنترل سریع عملیات' : 'Quick Operations'}</span>
+            </div>
+            <span className={`status-label ${stats?.config.is_queue_open ? 'emerald' : 'crimson'}`}>
+              <span className={`status-dot ${stats?.config.is_queue_open ? 'online' : 'offline'}`} />
+              {stats?.config.is_queue_open
+                ? lang === 'fa' ? 'صف باز' : 'Queue Open'
+                : lang === 'fa' ? 'صف بسته' : 'Queue Closed'}
+            </span>
+          </div>
+
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+              gap: 10,
+              padding: 12,
+              borderRadius: 'var(--radius-md)',
+              background: 'var(--bg-surface-2)',
+              border: '1px solid var(--border-subtle)',
+            }}
+          >
+            <div>
+              <div className="text-muted" style={{ fontSize: 11.5 }}>
+                {lang === 'fa' ? 'کل سکه‌های در گردش' : 'Coins in Circulation'}
+              </div>
+              <div className="mono" style={{ fontSize: 17, fontWeight: 700, color: 'var(--accent)', marginTop: 2 }}>
+                {formatNumber(analytics?.economy.total_coins, lang)}
+              </div>
+            </div>
+            <div>
+              <div className="text-muted" style={{ fontSize: 11.5 }}>
+                {lang === 'fa' ? 'میانگین سکه هر بازیکن' : 'Avg Coins / Player'}
+              </div>
+              <div className="mono" style={{ fontSize: 17, fontWeight: 700, marginTop: 2 }}>
+                {formatNumber(analytics?.economy.avg_coins_real, lang)}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {canWriteConfig && (
+              <button
+                type="button"
+                className={`btn ${stats?.config.is_queue_open ? 'btn-danger' : 'btn-emerald'}`}
+                style={{ justifyContent: 'space-between' }}
+                onClick={handleToggleQueue}
+                disabled={actionBusy === 'queue' || !stats}
+              >
+                <span>
+                  {stats?.config.is_queue_open
+                    ? lang === 'fa' ? 'بستن صف بازی آنلاین' : 'Close Matchmaking Queue'
+                    : lang === 'fa' ? 'باز کردن صف بازی آنلاین' : 'Open Matchmaking Queue'}
+                </span>
+                <Power size={15} />
+              </button>
+            )}
+
+            {canManageGames && (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{ justifyContent: 'space-between' }}
+                onClick={handleCleanupStuck}
+                disabled={actionBusy === 'cleanup'}
+              >
+                <span>{lang === 'fa' ? 'پاکسازی بازی‌های معلق (+۲ ساعت)' : 'Cleanup Stuck Matches (>2h)'}</span>
+                <Trash2 size={15} className="text-amber" />
+              </button>
+            )}
+
+            {hasAdminPermission(currentAdmin, 'notifications:write') && (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{ justifyContent: 'space-between' }}
+                onClick={() => onNavigateTab('notifications')}
+              >
+                <span>{lang === 'fa' ? 'ارسال اعلان درون‌بازی' : 'Send In-Game Notification'}</span>
+                <Bell size={15} className="text-sapphire" />
+              </button>
+            )}
+
+            {canBackup && (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{ justifyContent: 'space-between' }}
+                onClick={handleTriggerBackup}
+                disabled={actionBusy === 'backup'}
+              >
+                <span>
+                  {actionBusy === 'backup'
+                    ? lang === 'fa' ? 'در حال پشتیبان‌گیری...' : 'Creating backup...'
+                    : lang === 'fa' ? 'گرفتن پشتیبان فوری دیتابیس' : 'Run Instant DB Backup'}
+                </span>
+                <DatabaseBackup size={15} className="text-emerald" />
+              </button>
+            )}
+          </div>
+
+          <div
+            className="meta-inline"
+            style={{ marginTop: 'auto', paddingTop: 10, borderTop: '1px solid var(--border-subtle)' }}
+          >
+            <span>{lang === 'fa' ? 'نسخه مجاز:' : 'Allowed:'}</span>
+            <strong className="mono">v{stats?.config.allowed_version || '—'}</strong>
+            <span className="meta-sep">·</span>
+            <span>{lang === 'fa' ? 'مسدودشده:' : 'Banned:'}</span>
+            <strong className="mono text-crimson">
+              {formatNumber(stats?.users.banned ?? analytics?.economy.banned_users, lang)}
+            </strong>
+          </div>
+        </section>
+      </div>
+
+      {/* Bottom Row: Top Players + Game Popularity & Mode Split */}
+      <div className="dash-grid-sub">
+        <section className="card">
+          <div className="card-header">
+            <div className="card-title">
+              <Trophy size={16} className="text-accent" />
+              <span>{lang === 'fa' ? 'برترین بازیکنان واقعی' : 'Top Real Players'}</span>
+            </div>
+            <div className="segmented">
+              <button
+                type="button"
+                className={`segmented-btn ${leaderTab === 'score' ? 'active' : ''}`}
+                onClick={() => setLeaderTab('score')}
+              >
+                {lang === 'fa' ? 'امتیاز' : 'Score'}
+              </button>
+              <button
+                type="button"
+                className={`segmented-btn ${leaderTab === 'coin' ? 'active' : ''}`}
+                onClick={() => setLeaderTab('coin')}
+              >
+                {lang === 'fa' ? 'سکه' : 'Coins'}
+              </button>
+            </div>
+          </div>
+
+          {leaders.length === 0 ? (
+            <div className="empty-state" style={{ padding: '24px 12px' }}>
+              <span>{lang === 'fa' ? 'داده‌ای یافت نشد.' : 'No leaderboard data yet.'}</span>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {leaders.map((u, idx) => (
+                <div
+                  key={u._id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '9px 10px',
+                    borderRadius: 'var(--radius-sm)',
+                    background: 'var(--bg-surface-2)',
+                    border: '1px solid var(--border-subtle)',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                    <span
+                      className="mono"
+                      style={{
+                        width: 22,
+                        textAlign: 'center',
+                        fontWeight: 700,
+                        color: idx === 0 ? 'var(--accent)' : 'var(--text-muted)',
+                      }}
+                    >
+                      #{idx + 1}
+                    </span>
+                    <div style={{ minWidth: 0 }}>
+                      <button
+                        type="button"
+                        className="link-btn"
+                        onClick={() => onInspectUserById(u._id)}
+                      >
+                        {u.username || u._id}
+                      </button>
+                      <div className="mono text-muted" style={{ fontSize: 11 }}>
+                        {u._id}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mono" style={{ textAlign: 'end' }}>
+                    <div style={{ fontWeight: 700, color: leaderTab === 'coin' ? 'var(--accent)' : 'var(--emerald)' }}>
+                      {formatNumber(leaderTab === 'score' ? u.score : u.coin, lang)}
+                    </div>
+                    <div className="text-muted" style={{ fontSize: 11 }}>
+                      {leaderTab === 'score'
+                        ? `${formatNumber(u.coin, lang)} ${lang === 'fa' ? 'سکه' : 'coins'}`
+                        : `${formatNumber(u.score, lang)} ${lang === 'fa' ? 'امتیاز' : 'pts'}`}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="card">
+          <div className="card-header">
+            <div className="card-title">
+              <Gamepad2 size={16} className="text-sapphire" />
+              <span>{lang === 'fa' ? 'محبوبیت بازی‌ها و حالت‌های مسابقه' : 'Game & Mode Distribution'}</span>
+            </div>
+            <span className="text-muted" style={{ fontSize: 12 }}>
+              {lang === 'fa' ? '۲۰۰ مسابقه اخیر' : 'Recent 200 matches'}
+            </span>
+          </div>
+
+          {gameBreakdown.length === 0 ? (
+            <div className="empty-state" style={{ padding: '24px 12px' }}>
+              <span>{lang === 'fa' ? 'هنوز آماری ثبت نشده است.' : 'No match statistics recorded.'}</span>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
+              {gameBreakdown.slice(0, 6).map(([gameName, count]) => {
+                const pct = Math.round((count / totalGameTypeHits) * 100);
+                return (
+                  <div key={gameName}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, marginBottom: 4 }}>
+                      <span style={{ fontWeight: 600 }}>{gameName}</span>
+                      <span className="mono text-secondary">
+                        {formatNumber(count, lang)} ({pct}%)
+                      </span>
+                    </div>
+                    <div className="progress-track">
+                      <div className="progress-fill" style={{ width: `${pct}%` }} />
+                    </div>
+                  </div>
+                );
+              })}
+
+              {modeBreakdown.length > 0 && (
+                <div
+                  style={{
+                    marginTop: 8,
+                    paddingTop: 12,
+                    borderTop: '1px solid var(--border-subtle)',
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: 8,
+                  }}
+                >
+                  {modeBreakdown.map(([mode, count]) => (
+                    <span key={mode} className="tag">
+                      <span>{mode}</span>
+                      <span className="mono text-accent">{Math.round((count / totalModes) * 100)}%</span>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </section>
       </div>
     </div>
   );

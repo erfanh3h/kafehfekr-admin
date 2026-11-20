@@ -23,6 +23,7 @@ DEFAULT_ADMIN_PERMISSIONS = [
     "clans:manage",
     "reports:read",
     "reports:manage",
+    "notifications:write",
     "admins:manage",
     "system:backup",
 ]
@@ -43,6 +44,7 @@ ROLE_PERMISSIONS = {
         "clans:manage",
         "reports:read",
         "reports:manage",
+        "notifications:write",
         "system:backup",
     ],
     "moderator": [
@@ -50,14 +52,17 @@ ROLE_PERMISSIONS = {
         "users:read",
         "users:write",
         "games:read",
+        "games:manage",
         "clans:read",
         "reports:read",
         "reports:manage",
+        "notifications:write",
     ],
     "support": [
         "dashboard:read",
         "users:read",
         "games:read",
+        "clans:read",
         "reports:read",
     ],
 }
@@ -96,7 +101,7 @@ class AdminCollectionManager:
 
         clean_role = role if role in ROLE_PERMISSIONS else "admin"
         if permissions is None:
-            effective_perms = ROLE_PERMISSIONS.get(clean_role, ROLE_PERMISSIONS["admin"])
+            effective_perms = list(ROLE_PERMISSIONS.get(clean_role, ROLE_PERMISSIONS["admin"]))
         else:
             effective_perms = list(permissions)
 
@@ -152,7 +157,7 @@ class AdminCollectionManager:
         if role is not None and role in ROLE_PERMISSIONS:
             update_fields["role"] = role
             if permissions is None:
-                update_fields["permissions"] = ROLE_PERMISSIONS[role]
+                update_fields["permissions"] = list(ROLE_PERMISSIONS[role])
         if permissions is not None:
             update_fields["permissions"] = list(permissions)
         if is_active is not None:

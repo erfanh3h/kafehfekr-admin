@@ -1,31 +1,33 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Sliders,
-  Radio,
-  Clock,
-  Sparkles,
+  Power,
+  Smartphone,
+  Megaphone,
   Save,
   RefreshCw,
-  Bell,
+  Wrench,
   AlertTriangle,
-  Layers,
 } from 'lucide-react';
-import { SystemConfig } from '../types';
 import { ApiService } from '../services/api';
+import { AdminUser, LangCode, SystemConfig } from '../types';
+import { hasAdminPermission } from '../utils/adminUtils';
 
 interface ConfigViewProps {
+  currentAdmin: AdminUser | null;
+  onConfigChanged?: () => void;
   onNotify: (msg: string, type?: 'success' | 'error' | 'info') => void;
-  lang: 'fa' | 'en';
+  lang: LangCode;
 }
 
-export const ConfigView: React.FC<ConfigViewProps> = ({ onNotify, lang }) => {
-  const isFa = lang === 'fa';
-  const [loading, setLoading] = useState(false);
-  const [savingQueue, setSavingQueue] = useState(false);
-  const [savingVersions, setSavingVersions] = useState(false);
-  const [savingAnnouncement, setSavingAnnouncement] = useState(false);
+export const ConfigView: React.FC<ConfigViewProps> = ({
+  currentAdmin,
+  onConfigChanged,
+  onNotify,
+  lang,
+}) => {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState<string | null>(null);
 
-  // Form states
   const [isQueueOpen, setIsQueueOpen] = useState(true);
   const [queueHour, setQueueHour] = useState(0);
   const [queueMinute, setQueueMinute] = useState(0);
@@ -36,14 +38,24 @@ export const ConfigView: React.FC<ConfigViewProps> = ({ onNotify, lang }) => {
   const [announcement, setAnnouncement] = useState('');
   const [announcementActive, setAnnouncementActive] = useState(false);
 
+  const [maintenanceMode, setMaintenanceMode] = useState(false);
+  const [maintenanceMessage, setMaintenanceMessage] = useState('');
+
+  const canWriteConfig = hasAdminPermission(currentAdmin, 'config:write');
+
   const fetchConfig = async () => {
     setLoading(true);
     try {
-      const cfg = await ApiService.getConfig();
-      setIsQueueOpen(Boolean(cfg.is_queue_open));
+      const cfg: SystemConfig = await ApiService.getConfig();
+      setIsQueueOpen(cfg.is_queue_open ?? true);
+      setQueueHour(cfg.queue_open_hour ?? 0);
+      setQueueMinute(cfg.queue_open_minute ?? 0);
       setAllowedVersion(cfg.allowed_version || '2.0.0');
       setLatestVersion(cfg.latest_version || '2.0.0');
       setAnnouncement(cfg.announcement || '');
+      setAnnouncementActive(cfg.announcement_active ?? Boolean(cfg.announcement));
+      setMaintenanceMode(Boolean(cfg.maintenance_mode));
+      setMaintenanceMessage(cfg.maintenance_message || '');
     } catch (err: any) {
       onNotify(err.message, 'error');
     } finally {
@@ -55,226 +67,355 @@ export const ConfigView: React.FC<ConfigViewProps> = ({ onNotify, lang }) => {
     fetchConfig();
   }, []);
 
-  const handleSaveQueue = async () => {
-    setSavingQueue(true);
+  const handleSaveQueue = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving('queue');
     try {
       await ApiService.setQueue(isQueueOpen, queueHour, queueMinute);
-      onNotify(isFa ? 'تنظیمات صف مسابقات با موفقیت ذخیره شد.' : 'Queue settings saved successfully.', 'success');
+      onNotify(lang === 'fa' ? 'تنظیمات صف بازی ذخیره شد.' : 'Queue settings saved.', 'success');
+      onConfigChanged?.();
     } catch (err: any) {
       onNotify(err.message, 'error');
     } finally {
-      setSavingQueue(false);
+      setSaving(null);
     }
   };
 
-  const handleSaveVersions = async () => {
-    if (!allowedVersion || !latestVersion) {
-      onNotify(isFa ? 'لطفاً مقادیر نسخه را کامل وارد کنید.' : 'Please enter valid versions.', 'error');
-      return;
-    }
-    setSavingVersions(true);
+  const handleSaveVersions = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving('version');
     try {
       await ApiService.setVersions(allowedVersion, latestVersion);
-      onNotify(isFa ? 'نسخه‌های برنامه به‌روزرسانی شد. کلاینت‌ها ملزم به آپدیت می‌شوند.' : 'App versions updated.', 'success');
+      onNotify(lang === 'fa' ? 'نسخه‌های اپلیکیشن بروزرسانی شد.' : 'Client versions updated.', 'success');
+      onConfigChanged?.();
     } catch (err: any) {
       onNotify(err.message, 'error');
     } finally {
-      setSavingVersions(false);
+      setSaving(null);
     }
   };
 
-  const handleSaveAnnouncement = async () => {
-    setSavingAnnouncement(true);
+  const handleSaveAnnouncement = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving('announcement');
     try {
       await ApiService.setAnnouncement(announcement, announcementActive);
-      onNotify(isFa ? 'اعلان سراسری درون‌بازی ذخیره شد.' : 'Broadcast announcement updated.', 'success');
+      onNotify(lang === 'fa' ? 'تنظیمات بنر اعلان ذخیره شد.' : 'Announcement banner updated.', 'success');
+      onConfigChanged?.();
     } catch (err: any) {
       onNotify(err.message, 'error');
     } finally {
-      setSavingAnnouncement(false);
+      setSaving(null);
+    }
+  };
+
+  const handleSaveMaintenance = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving('maintenance');
+    try {
+      await ApiService.setMaintenance(maintenanceMode, maintenanceMessage);
+      onNotify(
+        lang === 'fa'
+          ? maintenanceMode
+            ? 'حالت تعمیرات فعال شد.'
+            : 'حالت تعمیرات غیرفعال شد.'
+          : maintenanceMode
+          ? 'Maintenance mode enabled.'
+          : 'Maintenance mode disabled.',
+        'success'
+      );
+      onConfigChanged?.();
+    } catch (err: any) {
+      onNotify(err.message, 'error');
+    } finally {
+      setSaving(null);
     }
   };
 
   return (
-    <div className="page-container">
-      {/* Header */}
-      <div className="panel">
-        <div className="panel-header">
-          <span className="panel-title">
-            <Sliders size={20} style={{ color: 'var(--gold-primary)' }} />
-            <span>{isFa ? 'تنظیمات سرور و کنترل صف مسابقات' : 'Server Engine & Matchmaking Queue'}</span>
-          </span>
-          <button className="btn btn-icon" onClick={fetchConfig} title={isFa ? 'تازه‌سازی' : 'Refresh'}>
-            <RefreshCw size={16} className={loading ? 'spin' : ''} />
-          </button>
+    <div className="page-body">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">{lang === 'fa' ? 'تنظیمات و صف بازی' : 'System Config & Queue'}</h1>
+          <p className="page-subtitle">
+            {lang === 'fa'
+              ? 'مدیریت صف آنلاین، حالت تعمیرات، کنترل نسخه اجباری و بنر اعلان عمومی'
+              : 'Control matchmaking queue, maintenance mode, forced updates, and lobby banners'}
+          </p>
         </div>
+        <button type="button" className="btn btn-secondary" onClick={fetchConfig} disabled={loading}>
+          <RefreshCw size={15} className={loading ? 'spin' : ''} />
+          <span>{lang === 'fa' ? 'بازخوانی تنظیمات' : 'Reload Config'}</span>
+        </button>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '20px' }}>
-        {/* Matchmaking Queue Section */}
-        <div className="panel">
-          <div className="panel-header">
-            <span className="panel-title">
-              <Radio size={18} style={{ color: 'var(--emerald)' }} />
-              <span>{isFa ? 'کنترل صف مسابقات (Matchmaking)' : 'Matchmaking Queue Gates'}</span>
-            </span>
-            <span className={`badge ${isQueueOpen ? 'green' : 'red'}`}>
-              {isQueueOpen ? (isFa ? 'صف باز است' : 'Queue Open') : (isFa ? 'صف مسدود' : 'Queue Closed')}
+      <div className="grid-2">
+        {/* Queue Status */}
+        <section className="card">
+          <div className="card-header">
+            <div className="card-title">
+              <Power size={16} className="text-accent" />
+              <span>{lang === 'fa' ? 'صف جستجوی بازی آنلاین' : 'Matchmaking Queue'}</span>
+            </div>
+            <span className={`status-label ${isQueueOpen ? 'emerald' : 'crimson'}`}>
+              <span className={`status-dot ${isQueueOpen ? 'online' : 'offline'}`} />
+              {isQueueOpen ? (lang === 'fa' ? 'باز' : 'Open') : lang === 'fa' ? 'بسته' : 'Closed'}
             </span>
           </div>
 
-          <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <form onSubmit={handleSaveQueue}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '12px 14px',
+                borderRadius: 'var(--radius-md)',
+                background: 'var(--bg-surface-2)',
+                border: '1px solid var(--border-subtle)',
+                marginBottom: 14,
+              }}
+            >
               <div>
-                <p style={{ fontWeight: '600', color: '#fff', fontSize: '14px' }}>
-                  {isFa ? 'وضعیت فوری ورود به صف' : 'Instant Queue Switch'}
-                </p>
-                <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                  {isFa
-                    ? 'در صورت بسته بودن، بازیکنان نمی‌توانند وارد صف مسابقات شوند.'
-                    : 'When disabled, players cannot join ranked queues.'}
-                </p>
+                <div style={{ fontWeight: 600, fontSize: 13.5 }}>
+                  {lang === 'fa' ? 'پذیرش بازیکن در صف رنک' : 'Accept Ranked Queue Entries'}
+                </div>
+                <div className="text-muted" style={{ fontSize: 12 }}>
+                  {lang === 'fa'
+                    ? 'در صورت بسته بودن، امکان شروع مسابقه جدید متوقف می‌شود'
+                    : 'Closing pauses new matchmaking entries while active games finish'}
+                </div>
               </div>
-              <label className="switch">
-                <input
-                  type="checkbox"
-                  checked={isQueueOpen}
-                  onChange={(e) => setIsQueueOpen(e.target.checked)}
-                />
-                <span className="slider"></span>
-              </label>
-            </div>
-
-            <div style={{ display: 'flex', gap: '12px', marginTop: '10px' }}>
-              <div className="input-group" style={{ flex: 1 }}>
-                <label className="input-label">{isFa ? 'ساعت بازگشایی خودکار' : 'Schedule Hour (0-23)'}</label>
-                <input
-                  type="number"
-                  min="0"
-                  max="23"
-                  className="input-field"
-                  value={queueHour}
-                  onChange={(e) => setQueueHour(parseInt(e.target.value) || 0)}
-                />
-              </div>
-
-              <div className="input-group" style={{ flex: 1 }}>
-                <label className="input-label">{isFa ? 'دقیقه' : 'Minute (0-59)'}</label>
-                <input
-                  type="number"
-                  min="0"
-                  max="59"
-                  className="input-field"
-                  value={queueMinute}
-                  onChange={(e) => setQueueMinute(parseInt(e.target.value) || 0)}
-                />
-              </div>
-            </div>
-
-            <button
-              className="btn btn-primary"
-              style={{ marginTop: '10px' }}
-              onClick={handleSaveQueue}
-              disabled={savingQueue}
-            >
-              <Save size={16} />
-              <span>{isFa ? 'ذخیره تنظیمات صف' : 'Save Queue Settings'}</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Version Control Section */}
-        <div className="panel">
-          <div className="panel-header">
-            <span className="panel-title">
-              <Layers size={18} style={{ color: 'var(--sapphire)' }} />
-              <span>{isFa ? 'مدیریت نسخه‌ها و آپدیت اجباری' : 'Client Version Enforcement'}</span>
-            </span>
-          </div>
-
-          <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-              {isFa
-                ? 'کلاینت بازی گودوت هنگام اتصال نسخه خود را با Allowed Version مقایسه می‌کند. اگر نسخه پایین‌تر باشد، صفحه آپدیت اجباری ظاهر می‌شود.'
-                : 'Godot client compares its version against Allowed Version. If lower, client displays force-update screen.'}
-            </p>
-
-            <div className="input-group">
-              <label className="input-label">{isFa ? 'حداقل نسخه مجاز (Allowed Version)' : 'Allowed Version'}</label>
-              <input
-                type="text"
-                className="input-field"
-                placeholder="2.0.0"
-                value={allowedVersion}
-                onChange={(e) => setAllowedVersion(e.target.value)}
-              />
-            </div>
-
-            <div className="input-group">
-              <label className="input-label">{isFa ? 'جدیدترین نسخه منتشرشده (Latest Version)' : 'Latest Version'}</label>
-              <input
-                type="text"
-                className="input-field"
-                placeholder="2.0.0"
-                value={latestVersion}
-                onChange={(e) => setLatestVersion(e.target.value)}
-              />
-            </div>
-
-            <button
-              className="btn btn-primary"
-              style={{ marginTop: '10px' }}
-              onClick={handleSaveVersions}
-              disabled={savingVersions}
-            >
-              <Save size={16} />
-              <span>{isFa ? 'اعمال نسخه‌ها به کلاینت‌ها' : 'Update Client Versions'}</span>
-            </button>
-          </div>
-        </div>
-
-        {/* In-Game Broadcast Announcement */}
-        <div className="panel" style={{ gridColumn: '1 / -1' }}>
-          <div className="panel-header">
-            <span className="panel-title">
-              <Bell size={18} style={{ color: 'var(--gold-primary)' }} />
-              <span>{isFa ? 'اعلان سراسری درون‌بازی (Broadcast Banner)' : 'Live In-Game Broadcast Announcement'}</span>
-            </span>
-          </div>
-
-          <div className="panel-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <div className="input-group">
-              <label className="input-label">{isFa ? 'متن پیام اعلان برای همه بازیکنان' : 'Announcement Text'}</label>
-              <textarea
-                className="input-field"
-                rows={3}
-                placeholder={isFa ? 'مثال: سرور امشب از ساعت ۰۲:۰۰ الی ۰۲:۳۰ برای به‌روزرسانی در دسترس نخواهد بود.' : 'Example: Scheduled maintenance at midnight.'}
-                value={announcement}
-                onChange={(e) => setAnnouncement(e.target.value)}
-              />
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', fontSize: '13px' }}>
-                <input
-                  type="checkbox"
-                  checked={announcementActive}
-                  onChange={(e) => setAnnouncementActive(e.target.checked)}
-                />
-                <span>{isFa ? 'فعال بودن نمایش بنر برای کاربران' : 'Display active in client'}</span>
-              </label>
-
               <button
-                className="btn btn-primary"
-                onClick={handleSaveAnnouncement}
-                disabled={savingAnnouncement}
+                type="button"
+                role="switch"
+                aria-checked={isQueueOpen}
+                aria-label={lang === 'fa' ? 'تغییر وضعیت صف' : 'Toggle queue'}
+                className={`switch-btn ${isQueueOpen ? 'on' : ''}`}
+                disabled={!canWriteConfig}
+                onClick={() => setIsQueueOpen((v) => !v)}
               >
-                <Save size={16} />
-                <span>{isFa ? 'ارسال و ذخیره اعلان' : 'Broadcast Announcement'}</span>
+                <span className="switch-knob" />
               </button>
             </div>
+
+            <div className="grid-2" style={{ gap: 10 }}>
+              <div className="input-group">
+                <label htmlFor="cfg-q-hour" className="input-label">
+                  {lang === 'fa' ? 'ساعت بازگشایی (اختیاری)' : 'Reopen Hour (Optional)'}
+                </label>
+                <input
+                  id="cfg-q-hour"
+                  type="number"
+                  min={0}
+                  max={23}
+                  className="input-field mono"
+                  value={queueHour}
+                  onChange={(e) => setQueueHour(Number(e.target.value))}
+                  disabled={!canWriteConfig}
+                />
+              </div>
+              <div className="input-group">
+                <label htmlFor="cfg-q-min" className="input-label">
+                  {lang === 'fa' ? 'دقیقه بازگشایی' : 'Reopen Minute'}
+                </label>
+                <input
+                  id="cfg-q-min"
+                  type="number"
+                  min={0}
+                  max={59}
+                  className="input-field mono"
+                  value={queueMinute}
+                  onChange={(e) => setQueueMinute(Number(e.target.value))}
+                  disabled={!canWriteConfig}
+                />
+              </div>
+            </div>
+
+            {canWriteConfig && (
+              <button type="submit" className="btn btn-primary" disabled={saving === 'queue'}>
+                <Save size={15} />
+                <span>{saving === 'queue' ? (lang === 'fa' ? 'در حال ذخیره...' : 'Saving...') : lang === 'fa' ? 'ذخیره تنظیمات صف' : 'Save Queue Settings'}</span>
+              </button>
+            )}
+          </form>
+        </section>
+
+        {/* Maintenance Mode */}
+        <section className="card">
+          <div className="card-header">
+            <div className="card-title">
+              <Wrench size={16} className="text-crimson" />
+              <span>{lang === 'fa' ? 'حالت تعمیرات سرور' : 'Server Maintenance Mode'}</span>
+            </div>
+            <span className={`status-label ${maintenanceMode ? 'crimson' : 'emerald'}`}>
+              <span className={`status-dot ${maintenanceMode ? 'offline' : 'online'}`} />
+              {maintenanceMode ? (lang === 'fa' ? 'در حال تعمیر' : 'Maintenance') : lang === 'fa' ? 'عادی' : 'Normal'}
+            </span>
           </div>
-        </div>
+
+          <form onSubmit={handleSaveMaintenance}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '12px 14px',
+                borderRadius: 'var(--radius-md)',
+                background: maintenanceMode ? 'var(--crimson-bg)' : 'var(--bg-surface-2)',
+                border: `1px solid ${maintenanceMode ? 'rgba(239, 68, 68, 0.3)' : 'var(--border-subtle)'}`,
+                marginBottom: 14,
+              }}
+            >
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 13.5 }}>
+                  {lang === 'fa' ? 'فعال‌سازی قفل تعمیرات' : 'Enable Maintenance Lock'}
+                </div>
+                <div className="text-muted" style={{ fontSize: 12 }}>
+                  {lang === 'fa'
+                    ? 'پیام تعمیرات به تمام کلاینت‌ها نمایش داده می‌شود'
+                    : 'Displays maintenance notice to incoming clients'}
+                </div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={maintenanceMode}
+                aria-label={lang === 'fa' ? 'تغییر حالت تعمیرات' : 'Toggle maintenance mode'}
+                className={`switch-btn ${maintenanceMode ? 'on danger' : ''}`}
+                disabled={!canWriteConfig}
+                onClick={() => setMaintenanceMode((v) => !v)}
+              >
+                <span className="switch-knob" />
+              </button>
+            </div>
+
+            <div className="input-group">
+              <label htmlFor="cfg-maint-msg" className="input-label">
+                {lang === 'fa' ? 'پیام وضعیت تعمیرات' : 'Maintenance Notice Message'}
+              </label>
+              <input
+                id="cfg-maint-msg"
+                type="text"
+                className="input-field"
+                value={maintenanceMessage}
+                onChange={(e) => setMaintenanceMessage(e.target.value)}
+                placeholder={lang === 'fa' ? 'مثلاً: سرور تا ساعت ۲۲:۳۰ در حال بروزرسانی است...' : 'e.g. Scheduled upgrade in progress...'}
+                disabled={!canWriteConfig}
+              />
+            </div>
+
+            {canWriteConfig && (
+              <button
+                type="submit"
+                className={`btn ${maintenanceMode ? 'btn-danger-solid' : 'btn-primary'}`}
+                disabled={saving === 'maintenance'}
+              >
+                <AlertTriangle size={15} />
+                <span>
+                  {saving === 'maintenance'
+                    ? lang === 'fa' ? 'در حال ذخیره...' : 'Saving...'
+                    : lang === 'fa' ? 'اعمال وضعیت تعمیرات' : 'Apply Maintenance State'}
+                </span>
+              </button>
+            )}
+          </form>
+        </section>
+
+        {/* Client Versions */}
+        <section className="card">
+          <div className="card-header">
+            <div className="card-title">
+              <Smartphone size={16} className="text-sapphire" />
+              <span>{lang === 'fa' ? 'کنترل نسخه اپلیکیشن' : 'Client Version Control'}</span>
+            </div>
+          </div>
+
+          <form onSubmit={handleSaveVersions}>
+            <div className="input-group">
+              <label htmlFor="cfg-allowed-ver" className="input-label">
+                {lang === 'fa' ? 'حداقل نسخه مجاز (آپدیت اجباری)' : 'Minimum Allowed Version (Force Update)'}
+              </label>
+              <input
+                id="cfg-allowed-ver"
+                type="text"
+                className="input-field mono"
+                value={allowedVersion}
+                onChange={(e) => setAllowedVersion(e.target.value)}
+                placeholder="2.0.0"
+                disabled={!canWriteConfig}
+                required
+              />
+            </div>
+
+            <div className="input-group">
+              <label htmlFor="cfg-latest-ver" className="input-label">
+                {lang === 'fa' ? 'جدیدترین نسخه منتشرشده (پیشنهادی)' : 'Latest Released Version'}
+              </label>
+              <input
+                id="cfg-latest-ver"
+                type="text"
+                className="input-field mono"
+                value={latestVersion}
+                onChange={(e) => setLatestVersion(e.target.value)}
+                placeholder="2.4.0"
+                disabled={!canWriteConfig}
+                required
+              />
+            </div>
+
+            {canWriteConfig && (
+              <button type="submit" className="btn btn-primary" disabled={saving === 'version'}>
+                <Save size={15} />
+                <span>{saving === 'version' ? (lang === 'fa' ? 'در حال ذخیره...' : 'Saving...') : lang === 'fa' ? 'بروزرسانی نسخه‌ها' : 'Save Versions'}</span>
+              </button>
+            )}
+          </form>
+        </section>
+
+        {/* Global Banner Announcement */}
+        <section className="card">
+          <div className="card-header">
+            <div className="card-title">
+              <Megaphone size={16} className="text-amber" />
+              <span>{lang === 'fa' ? 'بنر اعلان لابی بازی' : 'Lobby Announcement Banner'}</span>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={announcementActive}
+              aria-label={lang === 'fa' ? 'فعال بودن بنر' : 'Toggle banner active'}
+              className={`switch-btn ${announcementActive ? 'on' : ''}`}
+              disabled={!canWriteConfig}
+              onClick={() => setAnnouncementActive((v) => !v)}
+            >
+              <span className="switch-knob" />
+            </button>
+          </div>
+
+          <form onSubmit={handleSaveAnnouncement}>
+            <div className="input-group">
+              <label htmlFor="cfg-banner-msg" className="input-label">
+                {lang === 'fa' ? 'متن اعلان صفحه اصلی' : 'Banner Text'}
+              </label>
+              <textarea
+                id="cfg-banner-msg"
+                className="textarea-field"
+                value={announcement}
+                onChange={(e) => setAnnouncement(e.target.value)}
+                placeholder={lang === 'fa' ? 'متن اعلان برای نمایش در صفحه اصلی کلاینت...' : 'Announcement text shown in game lobby...'}
+                disabled={!canWriteConfig}
+              />
+            </div>
+
+            {canWriteConfig && (
+              <button type="submit" className="btn btn-primary" disabled={saving === 'announcement'}>
+                <Save size={15} />
+                <span>{saving === 'announcement' ? (lang === 'fa' ? 'در حال ذخیره...' : 'Saving...') : lang === 'fa' ? 'ذخیره بنر اعلان' : 'Save Banner'}</span>
+              </button>
+            )}
+          </form>
+        </section>
       </div>
     </div>
   );

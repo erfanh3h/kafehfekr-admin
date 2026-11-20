@@ -1,7 +1,7 @@
 import os
 import datetime
 from typing import Optional
-from fastapi import Header, Query, HTTPException, status
+from fastapi import Depends, Header, Query, HTTPException, status
 from jose import jwt, JWTError
 from passlib.context import CryptContext
 
@@ -32,12 +32,30 @@ def create_admin_access_token(admin_data: dict, expires_delta: Optional[datetime
         "permissions": admin_data.get("permissions", []),
         "is_admin": True,
     }
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
     if expires_delta:
-        expire = datetime.datetime.now(datetime.UTC) + expires_delta
+        expire = now_utc + expires_delta
     else:
-        expire = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=30)
+        expire = now_utc + datetime.timedelta(days=30)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def has_permission(admin: Optional[dict], permission: str) -> bool:
+    """Checks whether an authenticated admin holds the given RBAC permission."""
+    if not admin:
+        return False
+    if admin.get("role") == "superadmin":
+        return True
+    perms = admin.get("permissions") or []
+    if "*" in perms or permission in perms:
+        return True
+    # Also support namespace wildcard e.g. 'users:*'
+    if ":" in permission:
+        ns = permission.split(":", 1)[0]
+        if f"{ns}:*" in perms:
+            return True
+    return False
 
 
 async def get_current_admin(
@@ -53,7 +71,7 @@ async def get_current_admin(
     if not raw_token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="توکن اهراز هویت ادمین الزامی است.",
+            detail="توکن احراز هویت ادمین الزامی است.",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -105,3 +123,15 @@ async def get_current_admin(
             detail="توکن ادمین منقضی یا نامعتبر است.",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+
+def require_permission(permission: str):
+    """FastAPI dependency that enforces a specific RBAC permission."""
+    async def _dependency(current_admin: dict = Depends(get_current_admin)) -> dict:
+        if not has_permission(current_admin, permission):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"عدم دسترسی: حساب شما مجوز '{permission}' را ندارد.",
+            )
+        return current_admin
+    return _dependency

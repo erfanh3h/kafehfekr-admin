@@ -1,4 +1,18 @@
 export type AdminRole = 'superadmin' | 'admin' | 'moderator' | 'support';
+export type ThemeMode = 'dark' | 'light';
+export type LangCode = 'fa' | 'en';
+
+export type NavTab =
+  | 'dashboard'
+  | 'users'
+  | 'games'
+  | 'clans'
+  | 'notifications'
+  | 'purchases'
+  | 'reports'
+  | 'config'
+  | 'admins'
+  | 'system';
 
 export interface AdminUser {
   _id: string;
@@ -18,6 +32,8 @@ export interface DashboardStats {
     real: number;
     bots: number;
     joined_today: number;
+    banned?: number;
+    locked?: number;
   };
   matches: {
     total: number;
@@ -35,12 +51,53 @@ export interface DashboardStats {
   open_reports_count: number;
   config: {
     is_queue_open: boolean;
+    queue_open_hour?: number;
+    queue_open_minute?: number;
     latest_version: string;
     allowed_version: string;
     maintenance_mode: boolean;
+    maintenance_message?: string;
     announcement: string;
+    announcement_active?: boolean;
   };
   server_time: string;
+}
+
+export interface DailySeriesPoint {
+  date: string;
+  users: number;
+  matches: number;
+  purchases: number;
+}
+
+export interface AnalyticsOverview {
+  days: number;
+  daily_series: DailySeriesPoint[];
+  economy: {
+    total_coins: number;
+    avg_coins_real: number;
+    real_users: number;
+    banned_users: number;
+    locked_users: number;
+  };
+  top_by_score: Array<{
+    _id: string;
+    username: string;
+    score: number;
+    coin: number;
+    xp?: number;
+    is_active?: boolean;
+  }>;
+  top_by_coin: Array<{
+    _id: string;
+    username: string;
+    score: number;
+    coin: number;
+    xp?: number;
+    is_active?: boolean;
+  }>;
+  mode_breakdown: Record<string, number>;
+  product_breakdown: Record<string, number>;
 }
 
 export interface UserItem {
@@ -90,6 +147,7 @@ export interface GamePlayItem {
   user2_id?: string;
   user_scores?: any[];
   users_info?: any[];
+  player_names?: Record<string, string>;
   terminated_by_admin?: boolean;
 }
 
@@ -106,6 +164,7 @@ export interface GameRoundItem {
 export interface PurchaseItem {
   _id: string;
   user_id: string;
+  username?: string;
   product_id: string;
   market_type: string;
   token: string;
@@ -128,10 +187,21 @@ export interface ClanItem {
   created_at?: string;
 }
 
+export interface ClanMemberItem {
+  _id?: string;
+  clan_id?: string;
+  user_id: string;
+  username?: string;
+  role?: string;
+  joined_at?: string;
+}
+
 export interface ReportItem {
   _id: string;
   reporter_id: string;
+  reporter_username?: string;
   target_user_id: string;
+  target_username?: string;
   target_type: string;
   target_id?: string;
   reason: string;
@@ -146,17 +216,54 @@ export interface ReportItem {
 export interface SystemConfig {
   _id?: number;
   is_queue_open: boolean;
+  queue_open_hour?: number;
+  queue_open_minute?: number;
   latest_version: string;
   allowed_version: string;
   maintenance_mode?: boolean;
+  maintenance_message?: string;
   announcement?: string;
+  announcement_active?: boolean;
   update_finish_date?: string;
 }
 
 export interface AuditLogItem {
   _id: string;
   admin_id: string;
+  admin_username?: string;
   action: string;
   details: Record<string, any>;
   timestamp: string;
+}
+
+export interface BackupItem {
+  filename: string;
+  size_bytes: number;
+  size_formatted: string;
+  file_count?: number;
+  is_dir?: boolean;
+  modified: string;
+}
+
+export interface BroadcastNotificationItem {
+  _id: string;
+  target_type: 'user' | 'clan' | 'all';
+  target_label: string;
+  user_id?: string | null;
+  clan_id?: string | null;
+  title: string;
+  message: string;
+  sent_count: number;
+  admin_id: string;
+  admin_username?: string;
+  created_at: string;
+}
+
+export interface ConfirmDialogOptions {
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  variant?: 'danger' | 'warning' | 'primary';
+  onConfirm: () => Promise<void> | void;
 }

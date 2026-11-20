@@ -1,51 +1,58 @@
 import React, { useState, useEffect } from 'react';
 import {
-  UsersRound,
-  Search,
-  RefreshCw,
-  Trophy,
   Shield,
+  Search,
   Eye,
   Trash2,
-  Edit,
-  ChevronLeft,
+  RefreshCw,
   ChevronRight,
-  User,
+  ChevronLeft,
+  X,
+  Trophy,
+  Users,
 } from 'lucide-react';
-import { ClanItem } from '../types';
 import { ApiService } from '../services/api';
+import { AdminUser, ClanItem, ConfirmDialogOptions, LangCode } from '../types';
+import { formatNumber, hasAdminPermission } from '../utils/adminUtils';
 
 interface ClansViewProps {
+  currentAdmin: AdminUser | null;
   onOpenClanDetails: (clanId: string) => void;
+  onInspectUserById: (userId: string) => void;
+  onConfirm: (opts: ConfirmDialogOptions) => void;
   onNotify: (msg: string, type?: 'success' | 'error' | 'info') => void;
-  lang: 'fa' | 'en';
+  lang: LangCode;
 }
 
 export const ClansView: React.FC<ClansViewProps> = ({
+  currentAdmin,
   onOpenClanDetails,
+  onInspectUserById,
+  onConfirm,
   onNotify,
   lang,
 }) => {
-  const isFa = lang === 'fa';
   const [clans, setClans] = useState<ClanItem[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
-  const [limit] = useState(15);
   const [totalPages, setTotalPages] = useState(1);
-  const [search, setSearch] = useState('');
+  const [total, setTotal] = useState(0);
+  const [searchInput, setSearchInput] = useState('');
+  const [appliedSearch, setAppliedSearch] = useState('');
+
+  const canManageClans = hasAdminPermission(currentAdmin, 'clans:manage');
 
   const fetchClans = async () => {
     setLoading(true);
     try {
       const res = await ApiService.getClans({
         page,
-        limit,
-        search: search.trim() || undefined,
+        limit: 20,
+        search: appliedSearch || undefined,
       });
-      setClans(res.items);
-      setTotal(res.total);
-      setTotalPages(res.total_pages);
+      setClans(res.items || []);
+      setTotal(res.total || 0);
+      setTotalPages(res.total_pages || 1);
     } catch (err: any) {
       onNotify(err.message, 'error');
     } finally {
@@ -55,214 +62,209 @@ export const ClansView: React.FC<ClansViewProps> = ({
 
   useEffect(() => {
     fetchClans();
-  }, [page]);
+  }, [page, appliedSearch]);
 
-  const handleSearchSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setPage(1);
-    fetchClans();
-  };
-
-  const handleDisbandClan = async (clan: ClanItem) => {
-    if (!window.confirm(isFa ? `هشدار: آیا از انحلال کامل و حذف کلن "${clan.name}" اطمینان دارید؟ همه اعضا از کلن خارج خواهند شد.` : `Disband clan ${clan.name}?`)) {
-      return;
-    }
-    try {
-      await ApiService.disbandClan(clan._id);
-      onNotify(isFa ? `کلن "${clan.name}" منحل شد.` : `Clan ${clan.name} disbanded.`, 'success');
-      fetchClans();
-    } catch (err: any) {
-      onNotify(err.message, 'error');
-    }
+  const handleDisband = (clan: ClanItem) => {
+    onConfirm({
+      title: lang === 'fa' ? 'انحلال کامل کلن' : 'Disband Clan',
+      message:
+        lang === 'fa'
+          ? `کلن «${clan.name}» و تمامی عضویت‌های آن حذف خواهد شد. این عمل غیرقابل بازگشت است.`
+          : `Clan "${clan.name}" and all memberships will be permanently removed. Continue?`,
+      variant: 'danger',
+      confirmLabel: lang === 'fa' ? 'انحلال کلن' : 'Disband Clan',
+      onConfirm: async () => {
+        try {
+          await ApiService.disbandClan(clan._id);
+          onNotify(lang === 'fa' ? 'کلن با موفقیت منحل شد.' : 'Clan disbanded.', 'success');
+          fetchClans();
+        } catch (err: any) {
+          onNotify(err.message, 'error');
+        }
+      },
+    });
   };
 
   return (
-    <div className="page-container">
-      {/* Search Header */}
-      <div className="panel">
-        <div className="panel-body" style={{ display: 'flex', gap: '14px', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
-          <form onSubmit={handleSearchSubmit} style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
-            <div className="search-bar">
-              <Search size={16} style={{ color: 'var(--text-dim)' }} />
-              <input
-                type="text"
-                placeholder={isFa ? 'جستجو با نام کلن، تگ یا شناسه...' : 'Search by clan name, tag...'}
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-            </div>
-            <button type="submit" className="btn btn-primary">
-              <span>{isFa ? 'جستجو' : 'Search'}</span>
-            </button>
-            {search && (
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => {
-                  setSearch('');
-                  setPage(1);
-                  fetchClans();
-                }}
-              >
-                {isFa ? 'پاک کردن' : 'Clear'}
-              </button>
-            )}
-          </form>
-
-          <button className="btn btn-icon" onClick={fetchClans} title={isFa ? 'تازه‌سازی' : 'Refresh'}>
-            <RefreshCw size={16} className={loading ? 'spin' : ''} />
-          </button>
+    <div className="page-body">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">{lang === 'fa' ? 'کلن‌ها و اتحادها' : 'Clans & Alliances'}</h1>
+          <p className="page-subtitle">
+            {lang === 'fa'
+              ? `${formatNumber(total, lang)} کلن ثبت‌شده — ویرایش مشخصات، مدیریت اعضا و نظارت`
+              : `${formatNumber(total, lang)} registered clans — edit details, manage rosters, and moderate`}
+          </p>
         </div>
+        <button type="button" className="btn btn-secondary" onClick={fetchClans} disabled={loading}>
+          <RefreshCw size={15} className={loading ? 'spin' : ''} />
+          <span>{lang === 'fa' ? 'بروزرسانی' : 'Refresh'}</span>
+        </button>
       </div>
 
-      {/* Table */}
-      <div className="panel">
-        <div className="panel-header">
-          <span className="panel-title">
-            <UsersRound size={18} style={{ color: 'var(--gold-primary)' }} />
-            <span>{isFa ? 'کلن‌ها و اتحادیه‌های بازیکنان' : 'Player Clans & Guilds'}</span>
-            <span className="badge gold">{total} {isFa ? 'کلن' : 'Clans'}</span>
-          </span>
-        </div>
+      <div className="toolbar">
+        <form
+          className="search-box"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setPage(1);
+            setAppliedSearch(searchInput.trim());
+          }}
+        >
+          <Search size={15} className="search-icon" />
+          <input
+            type="text"
+            className="input-field"
+            placeholder={lang === 'fa' ? 'جستجوی نام، تگ یا شناسه کلن...' : 'Search clan name, tag, or ID...'}
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            aria-label={lang === 'fa' ? 'جستجوی کلن' : 'Search clans'}
+          />
+          {(searchInput || appliedSearch) && (
+            <button
+              type="button"
+              className="search-clear"
+              onClick={() => {
+                setSearchInput('');
+                setAppliedSearch('');
+                setPage(1);
+              }}
+            >
+              <X size={14} />
+            </button>
+          )}
+        </form>
+      </div>
 
-        <div className="table-responsive">
-          <table className="data-table">
-            <thead>
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>{lang === 'fa' ? 'کلن' : 'Clan'}</th>
+              <th>{lang === 'fa' ? 'رهبر کلن' : 'Leader'}</th>
+              <th>{lang === 'fa' ? 'سطح' : 'Level'}</th>
+              <th>{lang === 'fa' ? 'امتیاز کلن' : 'Trophies'}</th>
+              <th>{lang === 'fa' ? 'اعضا' : 'Members'}</th>
+              <th style={{ width: 110 }}>{lang === 'fa' ? 'عملیات' : 'Actions'}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              Array.from({ length: 5 }).map((_, i) => (
+                <tr key={i}>
+                  <td colSpan={6}><div className="skeleton" style={{ height: 18 }} /></td>
+                </tr>
+              ))
+            ) : clans.length === 0 ? (
               <tr>
-                <th>{isFa ? 'نام و نشان کلن' : 'Clan Name & Tag'}</th>
-                <th>{isFa ? 'سطح (Level)' : 'Level'}</th>
-                <th>{isFa ? 'جام‌ها (Trophies)' : 'Trophies'}</th>
-                <th>{isFa ? 'رهبر کلن' : 'Owner'}</th>
-                <th>{isFa ? 'تعداد اعضا' : 'Members'}</th>
-                <th>{isFa ? 'تاریخ تشکیل' : 'Created'}</th>
-                <th style={{ textAlign: 'center' }}>{isFa ? 'عملیات' : 'Actions'}</th>
+                <td colSpan={6}>
+                  <div className="empty-state">
+                    <Shield size={26} />
+                    <span>{lang === 'fa' ? 'کلنی یافت نشد.' : 'No clans found.'}</span>
+                  </div>
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr>
-                  <td colSpan={7} style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>
-                    <RefreshCw size={24} className="spin" style={{ margin: '0 auto 8px auto', display: 'block' }} />
-                    {isFa ? 'در حال دریافت اطلاعات کلن‌ها...' : 'Loading clans...'}
+            ) : (
+              clans.map((c) => (
+                <tr key={c._id}>
+                  <td>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                        <button type="button" className="link-btn" onClick={() => onOpenClanDetails(c._id)}>
+                          {c.name}
+                        </button>
+                        {c.tag && <span className="tag accent mono">[{c.tag}]</span>}
+                      </div>
+                      <span className="mono text-muted" style={{ fontSize: 11.5 }}>{c._id}</span>
+                    </div>
+                  </td>
+                  <td>
+                    {c.owner_id ? (
+                      <button
+                        type="button"
+                        className="link-btn"
+                        style={{ fontSize: 13 }}
+                        onClick={() => onInspectUserById(c.owner_id)}
+                      >
+                        {c.owner_name || c.owner_id}
+                      </button>
+                    ) : (
+                      <span className="text-muted">—</span>
+                    )}
+                  </td>
+                  <td className="mono" style={{ fontWeight: 600 }}>Lv.{c.level || 1}</td>
+                  <td>
+                    <span className="mono text-accent" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontWeight: 700 }}>
+                      <Trophy size={13} />
+                      {formatNumber(c.trophies, lang)}
+                    </span>
+                  </td>
+                  <td className="mono text-secondary">
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                      <Users size={13} />
+                      {formatNumber(c.member_count || 0, lang)}
+                      {c.max_members ? ` / ${formatNumber(c.max_members, lang)}` : ''}
+                    </span>
+                  </td>
+                  <td>
+                    <div className="row-actions">
+                      <button
+                        type="button"
+                        className="btn-icon sm"
+                        onClick={() => onOpenClanDetails(c._id)}
+                        title={lang === 'fa' ? 'جزئیات و ویرایش' : 'Details & Edit'}
+                        aria-label={`Inspect clan ${c.name}`}
+                      >
+                        <Eye size={14} />
+                      </button>
+                      {canManageClans && (
+                        <button
+                          type="button"
+                          className="btn-icon sm danger"
+                          onClick={() => handleDisband(c)}
+                          title={lang === 'fa' ? 'انحلال کلن' : 'Disband Clan'}
+                          aria-label={`Disband clan ${c.name}`}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
-              ) : clans.length === 0 ? (
-                <tr>
-                  <td colSpan={7} style={{ textAlign: 'center', padding: '30px', color: 'var(--text-dim)' }}>
-                    {isFa ? 'هیچ کلنی یافت نشد.' : 'No clans found.'}
-                  </td>
-                </tr>
-              ) : (
-                clans.map((c) => (
-                  <tr key={c._id}>
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        <div
-                          style={{
-                            width: '32px',
-                            height: '32px',
-                            borderRadius: '8px',
-                            backgroundColor: 'rgba(245, 158, 11, 0.15)',
-                            color: 'var(--gold-primary)',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            fontWeight: 'bold',
-                          }}
-                        >
-                          <Shield size={16} />
-                        </div>
-                        <div style={{ display: 'flex', flexDirection: 'column' }}>
-                          <span style={{ fontWeight: 'bold', color: '#fff' }}>{c.name}</span>
-                          <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>
-                            Tag: #{c.tag} | ID: {c._id}
-                          </span>
-                        </div>
-                      </div>
-                    </td>
+              ))
+            )}
+          </tbody>
+        </table>
 
-                    <td>
-                      <span className="badge blue">Lvl {c.level || 1}</span>
-                    </td>
-
-                    <td>
-                      <span style={{ color: 'var(--gold-primary)', fontWeight: 'bold', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                        <Trophy size={14} /> {c.trophies || 0}
-                      </span>
-                    </td>
-
-                    <td>
-                      <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                        {c.owner_name ? `${c.owner_name} (${c.owner_id})` : c.owner_id}
-                      </span>
-                    </td>
-
-                    <td>
-                      <span className="badge green">
-                        {c.member_count || 1} / {c.max_members || 40}
-                      </span>
-                    </td>
-
-                    <td style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                      {c.created_at ? new Date(c.created_at).toLocaleDateString() : '—'}
-                    </td>
-
-                    <td>
-                      <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
-                        <button
-                          className="btn-icon"
-                          style={{ width: '30px', height: '30px', color: 'var(--gold-primary)' }}
-                          onClick={() => onOpenClanDetails(c._id)}
-                          title={isFa ? 'مشاهده مشخصات و اعضای کلن' : 'Inspect Clan'}
-                        >
-                          <Eye size={15} />
-                        </button>
-
-                        <button
-                          className="btn-icon"
-                          style={{ width: '30px', height: '30px', color: 'var(--ruby)' }}
-                          onClick={() => handleDisbandClan(c)}
-                          title={isFa ? 'انحلال و حذف کلن' : 'Disband Clan'}
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Pagination */}
-        <div className="pagination">
-          <span>
-            {isFa
-              ? `صفحه ${page} از ${totalPages} (مجموع ${total} کلن)`
-              : `Page ${page} of ${totalPages} (${total} total)`}
-          </span>
-          <div className="pagination-controls">
-            <button
-              className="btn btn-secondary"
-              style={{ padding: '6px 12px' }}
-              disabled={page <= 1}
-              onClick={() => setPage(page - 1)}
-            >
-              <ChevronRight size={16} />
-              <span>{isFa ? 'قبلی' : 'Prev'}</span>
-            </button>
-            <button
-              className="btn btn-secondary"
-              style={{ padding: '6px 12px' }}
-              disabled={page >= totalPages}
-              onClick={() => setPage(page + 1)}
-            >
-              <span>{isFa ? 'بعدی' : 'Next'}</span>
-              <ChevronLeft size={16} />
-            </button>
+        {totalPages > 1 && (
+          <div className="pagination">
+            <span>
+              {lang === 'fa'
+                ? `صفحه ${formatNumber(page, lang)} از ${formatNumber(totalPages, lang)}`
+                : `Page ${page} of ${totalPages}`}
+            </span>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                disabled={page <= 1}
+                onClick={() => setPage((p) => p - 1)}
+              >
+                {lang === 'fa' ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
+                <span>{lang === 'fa' ? 'قبلی' : 'Prev'}</span>
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                disabled={page >= totalPages}
+                onClick={() => setPage((p) => p + 1)}
+              >
+                <span>{lang === 'fa' ? 'بعدی' : 'Next'}</span>
+                {lang === 'fa' ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}
+              </button>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

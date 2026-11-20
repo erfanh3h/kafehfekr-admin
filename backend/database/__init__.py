@@ -22,6 +22,8 @@ class AdminDatabase:
         self.clan_members = self.db["clan_members"]
         self.clan_challenges = self.db["clan_challenges"]
         self.social_reports = self.db["social_reports"]
+        self.notifications = self.db["notifications"]
+        self.admin_broadcasts = self.db["admin_broadcasts"]
         self.admins_col = self.db["admins"]
         self.audit_logs = self.db["admin_audit_logs"]
 

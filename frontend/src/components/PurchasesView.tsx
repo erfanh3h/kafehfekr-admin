@@ -2,58 +2,51 @@ import React, { useState, useEffect } from 'react';
 import {
   ShoppingBag,
   Search,
-  Filter,
   RefreshCw,
-  Coins,
-  ChevronLeft,
   ChevronRight,
-  CreditCard,
-  Calendar,
+  ChevronLeft,
+  X,
   Download,
 } from 'lucide-react';
-import { PurchaseItem } from '../types';
 import { ApiService } from '../services/api';
+import { DashboardStats, LangCode, PurchaseItem } from '../types';
+import { buildCsvContent, formatDateTime, formatNumber } from '../utils/adminUtils';
 
 interface PurchasesViewProps {
+  stats: DashboardStats | null;
+  onInspectUserById: (userId: string) => void;
   onNotify: (msg: string, type?: 'success' | 'error' | 'info') => void;
-  lang: 'fa' | 'en';
+  lang: LangCode;
 }
 
-const PRODUCT_COIN_VALUES: Record<string, number> = {
-  '1': 50,
-  '2': 160,
-  '3': 330,
-  '4': 525,
-  '5': 1100,
-  '6': 1700,
-};
-
-export const PurchasesView: React.FC<PurchasesViewProps> = ({ onNotify, lang }) => {
-  const isFa = lang === 'fa';
+export const PurchasesView: React.FC<PurchasesViewProps> = ({
+  stats,
+  onInspectUserById,
+  onNotify,
+  lang,
+}) => {
   const [purchases, setPurchases] = useState<PurchaseItem[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
-  const [limit] = useState(15);
   const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
 
-  const [marketType, setMarketType] = useState('');
-  const [productId, setProductId] = useState('');
-  const [userIdSearch, setUserIdSearch] = useState('');
+  const [marketFilter, setMarketFilter] = useState('');
+  const [userSearchInput, setUserSearchInput] = useState('');
+  const [appliedUserId, setAppliedUserId] = useState('');
 
   const fetchPurchases = async () => {
     setLoading(true);
     try {
       const res = await ApiService.getPurchases({
         page,
-        limit,
-        market_type: marketType || undefined,
-        product_id: productId || undefined,
-        user_id: userIdSearch.trim() || undefined,
+        limit: 20,
+        market_type: marketFilter || undefined,
+        user_id: appliedUserId || undefined,
       });
-      setPurchases(res.items);
-      setTotal(res.total);
-      setTotalPages(res.total_pages);
+      setPurchases(res.items || []);
+      setTotal(res.total || 0);
+      setTotalPages(res.total_pages || 1);
     } catch (err: any) {
       onNotify(err.message, 'error');
     } finally {
@@ -63,227 +56,224 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({ onNotify, lang }) 
 
   useEffect(() => {
     fetchPurchases();
-  }, [page, marketType, productId]);
+  }, [page, marketFilter, appliedUserId]);
 
-  const handleSearchSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setPage(1);
-    fetchPurchases();
-  };
-
-  const handleExportCsv = () => {
-    if (purchases.length === 0) return;
-    const headers = ['Transaction ID', 'User ID', 'Market', 'Product Pack', 'Coins', 'Token', 'Date'];
+  const handleExportCSV = () => {
+    const headers = ['ID', 'User ID', 'Username', 'Product ID', 'Market', 'Token', 'Date'];
     const rows = purchases.map((p) => [
-      `"${p._id}"`,
-      `"${p.user_id}"`,
-      `"${p.market_type}"`,
-      `"Pack #${p.product_id}"`,
-      PRODUCT_COIN_VALUES[p.product_id] || 0,
-      `"${p.token}"`,
-      `"${p.date ? new Date(p.date).toLocaleString() : ''}"`,
+      p._id,
+      p.user_id,
+      p.username || '',
+      p.product_id,
+      p.market_type,
+      p.token || '',
+      p.date || '',
     ]);
-    const csvContent = '\uFEFF' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const csv = buildCsvContent(headers, rows);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `kafefekr_purchases_${new Date().toISOString().slice(0, 10)}.csv`);
-    document.body.appendChild(link);
+    link.href = url;
+    link.download = `kafehfekr_purchases_p${page}.csv`;
     link.click();
-    document.body.removeChild(link);
-    onNotify(isFa ? 'فایل خروجی تراکنش‌ها با موفقیت دانلود شد.' : 'Purchases CSV exported.', 'success');
+    URL.revokeObjectURL(url);
   };
 
   return (
-    <div className="page-container">
-      {/* Filters and Search */}
-      <div className="panel">
-        <div className="panel-body" style={{ display: 'flex', flexWrap: 'wrap', gap: '14px', alignItems: 'center', justifyContent: 'space-between' }}>
-          <form onSubmit={handleSearchSubmit} style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
-            <div className="search-bar">
-              <Search size={16} style={{ color: 'var(--text-dim)' }} />
-              <input
-                type="text"
-                placeholder={isFa ? 'جستجو با شناسه کاربر (User ID)...' : 'Search by User ID...'}
-                value={userIdSearch}
-                onChange={(e) => setUserIdSearch(e.target.value)}
-              />
-            </div>
-            <button type="submit" className="btn btn-primary">
-              <span>{isFa ? 'جستجو' : 'Search'}</span>
-            </button>
-            {userIdSearch && (
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => {
-                  setUserIdSearch('');
-                  setPage(1);
-                  fetchPurchases();
-                }}
-              >
-                {isFa ? 'پاک کردن' : 'Clear'}
-              </button>
-            )}
-          </form>
-
-          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
-            {/* Market Filter */}
-            <select
-              className="input-field"
-              style={{ padding: '6px 10px', fontSize: '12px' }}
-              value={marketType}
-              onChange={(e) => {
-                setMarketType(e.target.value);
-                setPage(1);
-              }}
-            >
-              <option value="">{isFa ? 'همه مارکت‌ها' : 'All Markets'}</option>
-              <option value="bazaar">{isFa ? 'کافه بازار (Bazaar)' : 'Cafe Bazaar'}</option>
-              <option value="myket">{isFa ? 'مایکت (Myket)' : 'Myket'}</option>
-            </select>
-
-            {/* Product ID Filter */}
-            <select
-              className="input-field"
-              style={{ padding: '6px 10px', fontSize: '12px' }}
-              value={productId}
-              onChange={(e) => {
-                setProductId(e.target.value);
-                setPage(1);
-              }}
-            >
-              <option value="">{isFa ? 'همه بسته‌ها' : 'All Coin Packs'}</option>
-              <option value="1">{isFa ? 'بسته ۱ (۵۰ سکه)' : 'Pack 1 (50 Coins)'}</option>
-              <option value="2">{isFa ? 'بسته ۲ (۱۶۰ سکه)' : 'Pack 2 (160 Coins)'}</option>
-              <option value="3">{isFa ? 'بسته ۳ (۳۳۰ سکه)' : 'Pack 3 (330 Coins)'}</option>
-              <option value="4">{isFa ? 'بسته ۴ (۵۲۵ سکه)' : 'Pack 4 (525 Coins)'}</option>
-              <option value="5">{isFa ? 'بسته ۵ (۱۱۰۰ سکه)' : 'Pack 5 (1100 Coins)'}</option>
-              <option value="6">{isFa ? 'بسته ۶ (۱۷۰۰ سکه)' : 'Pack 6 (1700 Coins)'}</option>
-            </select>
-
-            <button className="btn btn-icon" onClick={fetchPurchases} title={isFa ? 'تازه‌سازی' : 'Refresh'}>
-              <RefreshCw size={16} className={loading ? 'spin' : ''} />
-            </button>
-
-            <button
-              className="btn btn-export"
-              style={{ padding: '6px 12px', fontSize: '12px' }}
-              onClick={handleExportCsv}
-              title={isFa ? 'خروجی تراکنش‌ها به صورت فایل CSV' : 'Export Purchases CSV'}
-            >
-              <Download size={14} />
-              <span>{isFa ? 'خروجی CSV' : 'Export CSV'}</span>
-            </button>
-          </div>
+    <div className="page-body">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">{lang === 'fa' ? 'تراکنش‌ها و فروشگاه' : 'Store Purchases'}</h1>
+          <p className="page-subtitle">
+            {lang === 'fa'
+              ? `${formatNumber(total, lang)} تراکنش ثبت‌شده در کافه‌بازار و مایکت`
+              : `${formatNumber(total, lang)} verified store transactions`}
+          </p>
+        </div>
+        <div className="header-actions">
+          <button type="button" className="btn btn-secondary" onClick={handleExportCSV} disabled={purchases.length === 0}>
+            <Download size={15} />
+            <span>{lang === 'fa' ? 'خروجی CSV' : 'Export CSV'}</span>
+          </button>
+          <button type="button" className="btn btn-secondary" onClick={fetchPurchases} disabled={loading}>
+            <RefreshCw size={15} className={loading ? 'spin' : ''} />
+            <span>{lang === 'fa' ? 'بروزرسانی' : 'Refresh'}</span>
+          </button>
         </div>
       </div>
 
-      {/* Table */}
-      <div className="panel">
-        <div className="panel-header">
-          <span className="panel-title">
-            <ShoppingBag size={18} style={{ color: 'var(--emerald)' }} />
-            <span>{isFa ? 'تراکنش‌های فروشگاه درون‌برنامه‌ای' : 'In-App Purchase Transactions'}</span>
-            <span className="badge green">{total} {isFa ? 'پرداخت' : 'Purchases'}</span>
-          </span>
-        </div>
-
-        <div className="table-responsive">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>{isFa ? 'شناسه تراکنش' : 'Transaction ID'}</th>
-                <th>{isFa ? 'شناسه کاربر خریدار' : 'User ID'}</th>
-                <th>{isFa ? 'مارکت و درگاه' : 'Market'}</th>
-                <th>{isFa ? 'بسته خریداری‌شده' : 'Product Package'}</th>
-                <th>{isFa ? 'سکه‌های اعطاشده' : 'Coins Granted'}</th>
-                <th>{isFa ? 'توکن خرید مارکت' : 'Purchase Token'}</th>
-                <th>{isFa ? 'تاریخ پرداخت' : 'Date'}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr>
-                  <td colSpan={7} style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>
-                    <RefreshCw size={24} className="spin" style={{ margin: '0 auto 8px auto', display: 'block' }} />
-                    {isFa ? 'در حال دریافت اطلاعات تراکنش‌ها...' : 'Loading purchases...'}
-                  </td>
-                </tr>
-              ) : purchases.length === 0 ? (
-                <tr>
-                  <td colSpan={7} style={{ textAlign: 'center', padding: '30px', color: 'var(--text-dim)' }}>
-                    {isFa ? 'هیچ تراکنشی یافت نشد.' : 'No purchases found.'}
-                  </td>
-                </tr>
-              ) : (
-                purchases.map((p) => {
-                  const coins = PRODUCT_COIN_VALUES[p.product_id] || '—';
-                  const isBazaar = p.market_type.toLowerCase().includes('bazaar');
-                  return (
-                    <tr key={p._id}>
-                      <td style={{ fontWeight: 'bold' }}>{p._id}</td>
-                      <td>
-                        <span style={{ color: 'var(--sapphire)', fontWeight: '600' }}>{p.user_id}</span>
-                      </td>
-                      <td>
-                        <span className={`badge ${isBazaar ? 'green' : 'blue'}`}>
-                          {isBazaar ? 'Cafe Bazaar' : 'Myket'}
-                        </span>
-                      </td>
-                      <td>
-                        <span style={{ fontWeight: '600' }}>
-                          {isFa ? `بسته شماره ${p.product_id}` : `Pack #${p.product_id}`}
-                        </span>
-                      </td>
-                      <td>
-                        <span style={{ color: 'var(--gold-primary)', fontWeight: 'bold' }}>
-                          +{coins} {isFa ? 'سکه' : 'coins'}
-                        </span>
-                      </td>
-                      <td style={{ fontSize: '11px', color: 'var(--text-dim)', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {p.token}
-                      </td>
-                      <td style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                        {p.date ? new Date(p.date).toLocaleString() : '—'}
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Pagination */}
-        <div className="pagination">
-          <span>
-            {isFa
-              ? `صفحه ${page} از ${totalPages} (مجموع ${total} تراکنش)`
-              : `Page ${page} of ${totalPages} (${total} total)`}
-          </span>
-          <div className="pagination-controls">
-            <button
-              className="btn btn-secondary"
-              style={{ padding: '6px 12px' }}
-              disabled={page <= 1}
-              onClick={() => setPage(page - 1)}
-            >
-              <ChevronRight size={16} />
-              <span>{isFa ? 'قبلی' : 'Prev'}</span>
-            </button>
-            <button
-              className="btn btn-secondary"
-              style={{ padding: '6px 12px' }}
-              disabled={page >= totalPages}
-              onClick={() => setPage(page + 1)}
-            >
-              <span>{isFa ? 'بعدی' : 'Next'}</span>
-              <ChevronLeft size={16} />
-            </button>
+      {/* Store Summary Strip */}
+      <div className="grid-3" style={{ marginBottom: 16 }}>
+        <div className="kpi-card">
+          <div className="kpi-top">
+            <span>{lang === 'fa' ? 'کل خریدهای تاییدشده' : 'Total Verified Purchases'}</span>
           </div>
+          <div className="kpi-value">{formatNumber(stats?.purchases.total ?? total, lang)}</div>
         </div>
+        <div className="kpi-card">
+          <div className="kpi-top">
+            <span>{lang === 'fa' ? 'کافه‌بازار (Bazaar)' : 'Cafe Bazaar'}</span>
+          </div>
+          <div className="kpi-value text-emerald">{formatNumber(stats?.purchases.bazaar ?? 0, lang)}</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-top">
+            <span>{lang === 'fa' ? 'مایکت (Myket)' : 'Myket'}</span>
+          </div>
+          <div className="kpi-value text-sapphire">{formatNumber(stats?.purchases.myket ?? 0, lang)}</div>
+        </div>
+      </div>
+
+      <div className="toolbar">
+        <form
+          className="search-box"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setPage(1);
+            setAppliedUserId(userSearchInput.trim());
+          }}
+        >
+          <Search size={15} className="search-icon" />
+          <input
+            type="text"
+            className="input-field"
+            placeholder={lang === 'fa' ? 'جستجو بر اساس شناسه کاربر...' : 'Filter by User ID...'}
+            value={userSearchInput}
+            onChange={(e) => setUserSearchInput(e.target.value)}
+            aria-label={lang === 'fa' ? 'جستجوی شناسه خریدار' : 'Filter by user ID'}
+          />
+          {(userSearchInput || appliedUserId) && (
+            <button
+              type="button"
+              className="search-clear"
+              onClick={() => {
+                setUserSearchInput('');
+                setAppliedUserId('');
+                setPage(1);
+              }}
+            >
+              <X size={14} />
+            </button>
+          )}
+        </form>
+
+        <div className="segmented">
+          {(
+            [
+              ['', 'همه مارکت‌ها', 'All Stores'],
+              ['bazaar', 'کافه‌بازار', 'Bazaar'],
+              ['myket', 'مایکت', 'Myket'],
+            ] as const
+          ).map(([val, fa, en]) => (
+            <button
+              key={val || 'all'}
+              type="button"
+              className={`segmented-btn ${marketFilter === val ? 'active' : ''}`}
+              onClick={() => {
+                setMarketFilter(val);
+                setPage(1);
+              }}
+            >
+              {lang === 'fa' ? fa : en}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>{lang === 'fa' ? 'خریدار' : 'Buyer'}</th>
+              <th>{lang === 'fa' ? 'بسته خریداری‌شده' : 'Product SKU'}</th>
+              <th>{lang === 'fa' ? 'مارکت' : 'Store'}</th>
+              <th>{lang === 'fa' ? 'توکن رسید' : 'Receipt Token'}</th>
+              <th>{lang === 'fa' ? 'تاریخ' : 'Date'}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              Array.from({ length: 5 }).map((_, i) => (
+                <tr key={i}>
+                  <td colSpan={5}><div className="skeleton" style={{ height: 18 }} /></td>
+                </tr>
+              ))
+            ) : purchases.length === 0 ? (
+              <tr>
+                <td colSpan={5}>
+                  <div className="empty-state">
+                    <ShoppingBag size={26} />
+                    <span>{lang === 'fa' ? 'تراکنشی یافت نشد.' : 'No purchases found.'}</span>
+                  </div>
+                </td>
+              </tr>
+            ) : (
+              purchases.map((p) => {
+                const isBazaar = p.market_type?.toLowerCase().includes('bazaar');
+                return (
+                  <tr key={p._id}>
+                    <td>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        <button
+                          type="button"
+                          className="link-btn"
+                          onClick={() => onInspectUserById(p.user_id)}
+                        >
+                          {p.username || p.user_id}
+                        </button>
+                        <span className="mono text-muted" style={{ fontSize: 11.5 }}>{p.user_id}</span>
+                      </div>
+                    </td>
+                    <td>
+                      <span className="tag accent mono">{p.product_id}</span>
+                    </td>
+                    <td>
+                      <span className={`tag ${isBazaar ? 'emerald' : 'sapphire'}`}>
+                        {p.market_type || 'Unknown'}
+                      </span>
+                    </td>
+                    <td className="mono text-muted" style={{ fontSize: 11.5, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {p.token || '—'}
+                    </td>
+                    <td className="mono text-secondary" style={{ fontSize: 12 }}>
+                      {formatDateTime(p.date, lang)}
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+
+        {totalPages > 1 && (
+          <div className="pagination">
+            <span>
+              {lang === 'fa'
+                ? `صفحه ${formatNumber(page, lang)} از ${formatNumber(totalPages, lang)}`
+                : `Page ${page} of ${totalPages}`}
+            </span>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                disabled={page <= 1}
+                onClick={() => setPage((p) => p - 1)}
+              >
+                {lang === 'fa' ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
+                <span>{lang === 'fa' ? 'قبلی' : 'Prev'}</span>
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                disabled={page >= totalPages}
+                onClick={() => setPage((p) => p + 1)}
+              >
+                <span>{lang === 'fa' ? 'بعدی' : 'Next'}</span>
+                {lang === 'fa' ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

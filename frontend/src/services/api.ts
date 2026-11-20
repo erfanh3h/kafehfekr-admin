@@ -1,21 +1,26 @@
 import {
   AdminUser,
+  AnalyticsOverview,
+  AuditLogItem,
+  BackupItem,
+  BroadcastNotificationItem,
+  ClanItem,
+  ClanMemberItem,
   DashboardStats,
-  UserItem,
-  UserFullDetails,
   GamePlayItem,
   PurchaseItem,
-  ClanItem,
   ReportItem,
   SystemConfig,
-  AuditLogItem,
+  UserFullDetails,
+  UserItem,
 } from '../types';
 
 const STORAGE_KEY_TOKEN = 'kafehfekr_admin_token';
 const STORAGE_KEY_API_URL = 'kafehfekr_admin_api_url';
-const DEFAULT_API_URL = typeof window !== 'undefined' && window.location.port === '5002'
-  ? window.location.origin
-  : 'http://localhost:5002';
+const DEFAULT_API_URL =
+  typeof window !== 'undefined' && window.location.port === '5002'
+    ? window.location.origin
+    : 'http://localhost:5002';
 
 export class ApiService {
   private static baseUrl: string = localStorage.getItem(STORAGE_KEY_API_URL) || DEFAULT_API_URL;
@@ -70,7 +75,6 @@ export class ApiService {
       });
 
       if (response.status === 401) {
-        // Token invalid / expired
         if (this.token && !endpoint.includes('/auth/login')) {
           this.logout();
           window.dispatchEvent(new CustomEvent('auth:expired'));
@@ -86,15 +90,20 @@ export class ApiService {
 
       return data as T;
     } catch (err: any) {
-      if (err.name === 'TypeError' && err.message?.includes('fetch')) {
-        throw new Error(`اتصال به سرور (${this.baseUrl}) برقرار نشد. لطفاً از روشن بودن سرور پایتون اطمینان حاصل کنید.`);
+      if (err?.name === 'TypeError' && err?.message?.includes('fetch')) {
+        throw new Error(
+          `اتصال به سرور (${this.baseUrl}) برقرار نشد. لطفاً از روشن بودن سرور ادمین اطمینان حاصل کنید.`
+        );
       }
       throw err;
     }
   }
 
   // ---------------- Auth ----------------
-  public static async login(username: string, password: string): Promise<{ access_token: string; admin: AdminUser }> {
+  public static async login(
+    username: string,
+    password: string
+  ): Promise<{ access_token: string; admin: AdminUser }> {
     const res = await this.request<{ access_token: string; admin: AdminUser }>('/admin/auth/login', {
       method: 'POST',
       body: JSON.stringify({ username, password }),
@@ -107,7 +116,10 @@ export class ApiService {
     return this.request<{ admin: AdminUser }>('/admin/auth/me');
   }
 
-  public static async changePassword(oldPassword: string, newPassword: string): Promise<{ status: string; message: string }> {
+  public static async changePassword(
+    oldPassword: string,
+    newPassword: string
+  ): Promise<{ status: string; message: string }> {
     return this.request('/admin/auth/change-password', {
       method: 'POST',
       body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
@@ -119,14 +131,19 @@ export class ApiService {
     return this.request<{ admins: AdminUser[] }>('/admin/admins');
   }
 
-  public static async createAdmin(data: Partial<AdminUser> & { password: string }): Promise<{ admin: AdminUser }> {
+  public static async createAdmin(
+    data: Partial<AdminUser> & { password: string }
+  ): Promise<{ admin: AdminUser }> {
     return this.request('/admin/admins', {
       method: 'POST',
       body: JSON.stringify(data),
     });
   }
 
-  public static async updateAdmin(adminId: string, data: Partial<AdminUser> & { password?: string }): Promise<{ admin: AdminUser }> {
+  public static async updateAdmin(
+    adminId: string,
+    data: Partial<AdminUser> & { password?: string }
+  ): Promise<{ admin: AdminUser }> {
     return this.request(`/admin/admins/${adminId}`, {
       method: 'PUT',
       body: JSON.stringify(data),
@@ -144,8 +161,20 @@ export class ApiService {
     return this.request<DashboardStats>('/admin/stats');
   }
 
-  public static async getAuditLogs(limit = 50): Promise<{ logs: AuditLogItem[] }> {
-    return this.request<{ logs: AuditLogItem[] }>(`/admin/audit-logs?limit=${limit}`);
+  public static async getAnalytics(days = 14): Promise<AnalyticsOverview> {
+    return this.request<AnalyticsOverview>(`/admin/analytics?days=${days}`);
+  }
+
+  public static async getAuditLogs(params?: {
+    limit?: number;
+    action?: string;
+    search?: string;
+  }): Promise<{ logs: AuditLogItem[] }> {
+    const q = new URLSearchParams();
+    q.append('limit', String(params?.limit || 80));
+    if (params?.action && params.action !== 'all') q.append('action', params.action);
+    if (params?.search) q.append('search', params.search);
+    return this.request<{ logs: AuditLogItem[] }>(`/admin/audit-logs?${q.toString()}`);
   }
 
   // ---------------- Users ----------------
@@ -169,11 +198,11 @@ export class ApiService {
   }
 
   public static async getUserDetails(userId: string): Promise<UserFullDetails> {
-    return this.request<UserFullDetails>(`/admin/users/${userId}`);
+    return this.request<UserFullDetails>(`/admin/users/${encodeURIComponent(userId)}`);
   }
 
   public static async updateUser(userId: string, data: Partial<UserItem>): Promise<{ user: UserItem }> {
-    return this.request(`/admin/users/${userId}`, {
+    return this.request(`/admin/users/${encodeURIComponent(userId)}`, {
       method: 'PUT',
       body: JSON.stringify(data),
     });
@@ -185,32 +214,43 @@ export class ApiService {
     amount: number,
     reason?: string
   ): Promise<any> {
-    return this.request(`/admin/users/${userId}/adjust-currency`, {
+    return this.request(`/admin/users/${encodeURIComponent(userId)}/adjust-currency`, {
       method: 'POST',
       body: JSON.stringify({ field, amount, reason }),
     });
   }
 
   public static async toggleBan(userId: string, isActive: boolean, reason?: string): Promise<any> {
-    return this.request(`/admin/users/${userId}/toggle-ban`, {
+    return this.request(`/admin/users/${encodeURIComponent(userId)}/toggle-ban`, {
       method: 'POST',
       body: JSON.stringify({ is_active: isActive, reason }),
     });
   }
 
   public static async resetUserLocks(userId: string): Promise<any> {
-    return this.request(`/admin/users/${userId}/reset-locks`, {
+    return this.request(`/admin/users/${encodeURIComponent(userId)}/reset-locks`, {
       method: 'POST',
     });
   }
 
+  public static async bulkResetLocks(userIds?: string[]): Promise<{ modified_count: number; matched_count: number }> {
+    return this.request('/admin/users/bulk-reset-locks', {
+      method: 'POST',
+      body: JSON.stringify({ user_ids: userIds && userIds.length > 0 ? userIds : null }),
+    });
+  }
+
   public static async deleteUser(userId: string): Promise<{ status: string }> {
-    return this.request(`/admin/users/${userId}`, {
+    return this.request(`/admin/users/${encodeURIComponent(userId)}`, {
       method: 'DELETE',
     });
   }
 
-  public static async bulkDistributeCoins(amount: number, filterType = 'all', reason?: string): Promise<any> {
+  public static async bulkDistributeCoins(
+    amount: number,
+    filterType = 'all',
+    reason?: string
+  ): Promise<{ modified_count: number; amount: number }> {
     return this.request('/admin/users/bulk-coins', {
       method: 'POST',
       body: JSON.stringify({ amount, filter_type: filterType, reason }),
@@ -240,11 +280,11 @@ export class ApiService {
   }
 
   public static async getGameDetails(gameId: string): Promise<{ match: GamePlayItem; rounds: any[] }> {
-    return this.request(`/admin/games/${gameId}`);
+    return this.request(`/admin/games/${encodeURIComponent(gameId)}`);
   }
 
   public static async terminateGame(gameId: string): Promise<any> {
-    return this.request(`/admin/games/${gameId}/terminate`, {
+    return this.request(`/admin/games/${encodeURIComponent(gameId)}/terminate`, {
       method: 'POST',
     });
   }
@@ -281,6 +321,16 @@ export class ApiService {
     });
   }
 
+  public static async setMaintenance(maintenanceMode: boolean, maintenanceMessage = ''): Promise<any> {
+    return this.request('/admin/config/maintenance', {
+      method: 'POST',
+      body: JSON.stringify({
+        maintenance_mode: maintenanceMode,
+        maintenance_message: maintenanceMessage,
+      }),
+    });
+  }
+
   // ---------------- Purchases ----------------
   public static async getPurchases(params: {
     page?: number;
@@ -313,19 +363,28 @@ export class ApiService {
     return this.request(`/admin/clans?${q.toString()}`);
   }
 
-  public static async getClanDetails(clanId: string): Promise<{ clan: ClanItem; members: any[]; challenges: any[] }> {
-    return this.request(`/admin/clans/${clanId}`);
+  public static async getClanDetails(
+    clanId: string
+  ): Promise<{ clan: ClanItem; members: ClanMemberItem[]; challenges: any[] }> {
+    return this.request(`/admin/clans/${encodeURIComponent(clanId)}`);
   }
 
-  public static async updateClan(clanId: string, data: Partial<ClanItem>): Promise<any> {
-    return this.request(`/admin/clans/${clanId}`, {
+  public static async updateClan(clanId: string, data: Partial<ClanItem>): Promise<ClanItem> {
+    return this.request(`/admin/clans/${encodeURIComponent(clanId)}`, {
       method: 'PUT',
       body: JSON.stringify(data),
     });
   }
 
+  public static async removeClanMember(clanId: string, userId: string): Promise<any> {
+    return this.request(
+      `/admin/clans/${encodeURIComponent(clanId)}/members/${encodeURIComponent(userId)}`,
+      { method: 'DELETE' }
+    );
+  }
+
   public static async disbandClan(clanId: string): Promise<any> {
-    return this.request(`/admin/clans/${clanId}`, {
+    return this.request(`/admin/clans/${encodeURIComponent(clanId)}`, {
       method: 'DELETE',
     });
   }
@@ -345,20 +404,68 @@ export class ApiService {
   }
 
   public static async updateReport(reportId: string, status: string, adminNotes?: string): Promise<any> {
-    return this.request(`/admin/reports/${reportId}`, {
+    return this.request(`/admin/reports/${encodeURIComponent(reportId)}`, {
       method: 'PUT',
       body: JSON.stringify({ status, admin_notes: adminNotes }),
     });
   }
 
+  // ---------------- Notifications ----------------
+  public static async sendNotification(payload: {
+    target_type: 'user' | 'clan' | 'all';
+    title: string;
+    message: string;
+    user_id?: string;
+    clan_id?: string;
+  }): Promise<BroadcastNotificationItem> {
+    return this.request('/admin/notifications/send', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  public static async getNotificationHistory(
+    limit = 30
+  ): Promise<{ items: BroadcastNotificationItem[] }> {
+    return this.request(`/admin/notifications/history?limit=${limit}`);
+  }
+
   // ---------------- System Operations ----------------
-  public static async triggerBackup(): Promise<{ status: string; message: string }> {
+  public static async triggerBackup(): Promise<{ status: string; message: string; filename?: string }> {
     return this.request('/admin/system/backup', {
       method: 'POST',
     });
   }
 
-  public static async getBackups(): Promise<{ backups: any[] }> {
+  public static async getBackups(): Promise<{ backups: BackupItem[] }> {
     return this.request('/admin/system/backups');
+  }
+
+  public static async downloadBackup(filename: string): Promise<void> {
+    const url = `${this.baseUrl}/admin/system/backups/${encodeURIComponent(filename)}/download`;
+    const headers: Record<string, string> = {};
+    if (this.token) {
+      headers['Authorization'] = `Bearer ${this.token}`;
+    }
+    const response = await fetch(url, { headers });
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      throw new Error(data?.detail || `خطا در دانلود فایل پشتیبان (${response.status})`);
+    }
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = filename.endsWith('.zip') ? filename : `${filename}.zip`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(objectUrl);
+  }
+
+  public static async deleteBackup(filename: string): Promise<{ status: string; filename: string }> {
+    return this.request(`/admin/system/backups/${encodeURIComponent(filename)}`, {
+      method: 'DELETE',
+    });
   }
 }
