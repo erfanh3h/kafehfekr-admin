@@ -63,6 +63,7 @@ export const App: React.FC = () => {
 
   // Modals & Overlays
   const [inspectedUserId, setInspectedUserId] = useState<string | null>(null);
+  const [inspectedUserTab, setInspectedUserTab] = useState<'overview' | 'games' | 'purchases' | 'edit' | 'notify'>('overview');
   const [currencyUser, setCurrencyUser] = useState<UserItem | null>(null);
   const [inspectedGameId, setInspectedGameId] = useState<string | null>(null);
   const [inspectedClanId, setInspectedClanId] = useState<string | null>(null);
@@ -296,7 +297,10 @@ export const App: React.FC = () => {
             <UsersView
               key={`users-${refreshTick}`}
               currentAdmin={currentAdmin}
-              onOpenDetails={(u) => setInspectedUserId(u._id)}
+              onOpenDetails={(u, tab = 'overview') => {
+                setInspectedUserTab(tab);
+                setInspectedUserId(u._id);
+              }}
               onOpenAdjustCurrency={(u) => setCurrencyUser(u)}
               onConfirm={setConfirmDialog}
               onNotify={addToast}
@@ -404,6 +408,7 @@ export const App: React.FC = () => {
 
       <UserDetailsModal
         userId={inspectedUserId}
+        initialTab={inspectedUserTab}
         currentAdmin={currentAdmin}
         onClose={() => setInspectedUserId(null)}
         onSuccess={() => {

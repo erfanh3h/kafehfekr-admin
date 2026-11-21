@@ -33,6 +33,7 @@ import { formatDateTime, formatNumber, hasAdminPermission } from '../utils/admin
 
 interface UserDetailsModalProps {
   userId: string | null;
+  initialTab?: 'overview' | 'games' | 'purchases' | 'edit' | 'notify';
   currentAdmin: AdminUser | null;
   onClose: () => void;
   onSuccess: () => void;
@@ -42,6 +43,7 @@ interface UserDetailsModalProps {
 
 export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
   userId,
+  initialTab,
   currentAdmin,
   onClose,
   onSuccess,
@@ -88,14 +90,14 @@ export const UserDetailsModal: React.FC<UserDetailsModalProps> = ({
 
   useEffect(() => {
     if (userId) {
-      setTab('overview');
+      setTab(initialTab || 'overview');
       setNoticeTitle('');
       setNoticeMessage('');
       loadDetails(userId);
     } else {
       setDetails(null);
     }
-  }, [userId]);
+  }, [userId, initialTab]);
 
   if (!userId) return null;
 

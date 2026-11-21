@@ -5,7 +5,12 @@ import secrets
 import shutil
 import string
 import zipfile
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+try:
+    from zoneinfo import ZoneInfo
+    TEHRAN_TZ = ZoneInfo("Asia/Tehran")
+except Exception:
+    TEHRAN_TZ = timezone(timedelta(hours=3, minutes=30), name="Asia/Tehran")
 from typing import Optional, List, Dict, Any, Tuple
 from fastapi import HTTPException, status
 from bson import ObjectId
@@ -20,6 +25,11 @@ from security import (
 BOT_ID_REGEX = "^(bot_|test_bot)"
 
 
+def now_tehran() -> datetime:
+    """Returns the current datetime in the Asia/Tehran timezone (UTC+03:30)."""
+    return datetime.now(TEHRAN_TZ)
+
+
 def _clean_doc(doc: Any) -> Any:
     """Recursively converts MongoDB/BSON types into JSON serializable types."""
     if doc is None:
@@ -30,7 +40,11 @@ def _clean_doc(doc: Any) -> Any:
         cleaned = {}
         for k, v in doc.items():
             if isinstance(v, datetime):
-                cleaned[k] = v.isoformat()
+                if v.tzinfo is None:
+                    # Naive datetime stored in UTC MongoDB -> mark as UTC
+                    cleaned[k] = v.replace(tzinfo=timezone.utc).isoformat()
+                else:
+                    cleaned[k] = v.isoformat()
             elif isinstance(v, ObjectId):
                 cleaned[k] = str(v)
             elif isinstance(v, (dict, list)):
@@ -296,13 +310,16 @@ def get_dashboard_stats() -> dict:
     banned_users = db.users.count_documents({"is_active": False})
     locked_users = db.users.count_documents(_locked_users_query())
 
-    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    users_today = db.users.count_documents({"join_date": {"$gte": today_start}})
+    now_t = now_tehran()
+    today_start = now_t.replace(hour=0, minute=0, second=0, microsecond=0)
+    # Convert today_start to UTC naive datetime for querying MongoDB
+    today_start_utc = today_start.astimezone(timezone.utc).replace(tzinfo=None)
+    users_today = db.users.count_documents({"join_date": {"$gte": today_start_utc}})
 
     total_matches = db.game_play_history.count_documents({})
     live_matches = db.game_play_history.count_documents({"is_finished": False})
     finished_matches = db.game_play_history.count_documents({"is_finished": True})
-    matches_today = db.game_play_history.count_documents({"start_date": {"$gte": today_start}})
+    matches_today = db.game_play_history.count_documents({"start_date": {"$gte": today_start_utc}})
 
     total_purchases = db.purchases.count_documents({})
     bazaar_purchases = db.purchases.count_documents({"market_type": {"$regex": "bazaar", "$options": "i"}})
@@ -353,7 +370,9 @@ def get_dashboard_stats() -> dict:
             "announcement": config.get("announcement", ""),
             "announcement_active": bool(config.get("announcement_active", False)),
         },
-        "server_time": datetime.now().isoformat(),
+        "server_time": now_t.isoformat(),
+        "server_timezone": "Asia/Tehran",
+        "timezone_offset": "+03:30",
     }
 
 
@@ -620,21 +639,132 @@ def adjust_user_currency(user_id: str, field: str, amount: int, reason: str = ""
     }
 
 
+def _kick_banned_user_from_realtime(user_id: str, reason: str = "") -> None:
+    """Notifies the realtime backend (:5000) to immediately disconnect all active sockets of a banned user."""
+    backend_url = os.getenv("BACKEND_INTERNAL_URL", "http://127.0.0.1:5000").rstrip("/")
+    secret_key = os.getenv("SECRET_KEY", "09da5e74afaa9ma2565c818195b7b9563b93xc059f6f0f4cab6cf63b88e8d3e7")
+    import json
+    import threading
+    import urllib.request
+
+    def _post():
+        try:
+            url = f"{backend_url}/internal/auth/force-logout"
+            payload = json.dumps({
+                "user_id": str(user_id),
+                "reason": "banned",
+                "message": f"حساب کاربری شما مسدود شد: {reason}" if reason else "حساب کاربری شما توسط مدیریت مسدود شده است.",
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Internal-Secret": secret_key,
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=1.5) as resp:
+                resp.read()
+        except Exception as e:
+            print(f"[kick_banned_user] Notice: {e}")
+
+    threading.Thread(target=_post, daemon=True).start()
+
+
+def _emit_realtime_social_notice(user_ids: List[str], title: str, body: str) -> None:
+    """Pushes a realtime SocialNotification event to connected players via the backend bridge."""
+    if not user_ids:
+        return
+    backend_url = os.getenv("BACKEND_INTERNAL_URL", "http://127.0.0.1:5000").rstrip("/")
+    secret_key = os.getenv("SECRET_KEY", "09da5e74afaa9ma2565c818195b7b9563b93xc059f6f0f4cab6cf63b88e8d3e7")
+    import json
+    import threading
+    import urllib.request
+
+    def _post():
+        try:
+            # Emit to up to 200 individual user rooms
+            events = [
+                {
+                    "room": uid,
+                    "command_id": "SocialNotification",
+                    "data": {
+                        "type": "admin_notice",
+                        "title": title,
+                        "body": body,
+                        "created_at": datetime.now().isoformat(),
+                    },
+                }
+                for uid in user_ids[:200]
+            ]
+            url = f"{backend_url}/internal/social/emit"
+            payload = json.dumps({"events": events}).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Internal-Secret": secret_key,
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=1.5) as resp:
+                resp.read()
+        except Exception as e:
+            print(f"[emit_realtime_notice] Notice: {e}")
+
+    threading.Thread(target=_post, daemon=True).start()
+
+
 def toggle_user_ban(user_id: str, is_active: bool, reason: str = "", admin_id: str = "") -> dict:
     uid = str(user_id)
     user = db.users.find_one({"_id": uid})
     if not user:
         raise HTTPException(status_code=404, detail="کاربر یافت نشد.")
 
-    db.users.find_one_and_update({"_id": uid}, {"$set": {"is_active": bool(is_active)}})
+    now = datetime.now()
+    if not is_active:
+        # Banning user: mark inactive and banned, clear any live game locks
+        db.users.find_one_and_update(
+            {"_id": uid},
+            {
+                "$set": {
+                    "is_active": False,
+                    "is_banned": True,
+                    "ban_reason": str(reason or ""),
+                    "banned_at": now,
+                    "open_game_id": "",
+                    "open_pre_game_id": "",
+                }
+            },
+        )
+        # Terminate live matches & force logout active sockets in realtime backend
+        _kick_banned_user_from_realtime(uid, reason)
+    else:
+        # Unbanning user
+        db.users.find_one_and_update(
+            {"_id": uid},
+            {
+                "$set": {
+                    "is_active": True,
+                    "is_banned": False,
+                },
+                "$unset": {
+                    "ban_reason": "",
+                    "banned_at": "",
+                },
+            },
+        )
 
     _log_admin_action(admin_id, "toggle_user_status", {
         "user_id": uid,
         "is_active": is_active,
+        "is_banned": not is_active,
         "reason": reason,
     })
 
-    return {"user_id": uid, "is_active": is_active}
+    return {"user_id": uid, "is_active": is_active, "is_banned": not is_active}
 
 
 def reset_user_locks(user_id: str, admin_id: str = "") -> dict:
@@ -1183,9 +1313,19 @@ def send_admin_notification(
                 "_id": generate_notice_id("ntf_"),
                 "broadcast_id": broadcast_id,
                 "user_id": uid,
-                "title": clean_title,
-                "message": clean_message,
                 "type": "admin_notice",
+                "category": "system",
+                "title": clean_title,
+                "body": clean_message,
+                "message": clean_message,
+                "actor_id": "admin",
+                "actor_name": "مدیریت کافه فکر",
+                "actor_image": 0,
+                "payload": {
+                    "broadcast_id": broadcast_id,
+                    "target_type": target_type,
+                    "admin_id": str(admin_id or "system"),
+                },
                 "is_read": False,
                 "status": "unread",
                 "created_at": now,
@@ -1196,7 +1336,11 @@ def send_admin_notification(
         # Insert in batches of 500 to keep MongoDB write payloads safe
         batch_size = 500
         for i in range(0, len(docs), batch_size):
+            db.social_notifications.insert_many(docs[i : i + batch_size])
             db.notifications.insert_many(docs[i : i + batch_size])
+
+        # Push realtime notification via WebSocket bridge if users are online in-game
+        _emit_realtime_social_notice(target_user_ids, clean_title, clean_message)
 
     broadcast_doc = {
         "_id": broadcast_id,

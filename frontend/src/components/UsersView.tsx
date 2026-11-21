@@ -14,6 +14,7 @@ import {
   LockOpen,
   Copy,
   Users,
+  Send,
 } from 'lucide-react';
 import { ApiService } from '../services/api';
 import { AdminUser, ConfirmDialogOptions, LangCode, UserItem } from '../types';
@@ -21,7 +22,7 @@ import { buildCsvContent, formatNumber, hasAdminPermission } from '../utils/admi
 
 interface UsersViewProps {
   currentAdmin: AdminUser | null;
-  onOpenDetails: (user: UserItem) => void;
+  onOpenDetails: (user: UserItem, initialTab?: 'overview' | 'games' | 'purchases' | 'edit' | 'notify') => void;
   onOpenAdjustCurrency: (user: UserItem) => void;
   onConfirm: (opts: ConfirmDialogOptions) => void;
   onNotify: (msg: string, type?: 'success' | 'error' | 'info') => void;
@@ -50,6 +51,7 @@ export const UsersView: React.FC<UsersViewProps> = ({
 
   const canWriteUsers = hasAdminPermission(currentAdmin, 'users:write');
   const canWriteEconomy = hasAdminPermission(currentAdmin, 'economy:write');
+  const canSendNotice = hasAdminPermission(currentAdmin, 'notifications:write');
 
   const fetchUsers = async (overrides?: {
     page?: number;
@@ -480,6 +482,17 @@ export const UsersView: React.FC<UsersViewProps> = ({
                         >
                           <Eye size={14} />
                         </button>
+                        {canSendNotice && (
+                          <button
+                            type="button"
+                            className="btn-icon sm"
+                            onClick={() => onOpenDetails(u, 'notify')}
+                            title={lang === 'fa' ? 'ارسال پیام / اعلان مستقیم' : 'Send Direct Message'}
+                            aria-label={`Send direct message to ${u.username || u._id}`}
+                          >
+                            <Send size={14} className="text-accent" />
+                          </button>
+                        )}
                         {canWriteEconomy && (
                           <button
                             type="button"

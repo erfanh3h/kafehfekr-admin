@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   LogOut,
   Settings,
@@ -8,8 +8,10 @@ import {
   Sun,
   Moon,
   Menu,
+  Clock,
 } from 'lucide-react';
 import { LangCode, NavTab, ThemeMode } from '../types';
+import { formatTehranClock } from '../utils/adminUtils';
 
 interface NavbarProps {
   activeTab: NavTab;
@@ -52,6 +54,14 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenMobileMenu,
 }) => {
   const currentTitle = TAB_TITLES[activeTab]?.[lang] || activeTab;
+  const [tehranTime, setTehranTime] = useState<string>(() => formatTehranClock(new Date(), lang));
+
+  useEffect(() => {
+    const tick = () => setTehranTime(formatTehranClock(new Date(), lang));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [lang]);
 
   return (
     <header className="navbar">
@@ -85,6 +95,17 @@ export const Navbar: React.FC<NavbarProps> = ({
           </span>
           <span className="kbd-hint">Ctrl K</span>
         </button>
+
+        <div
+          className="server-indicator"
+          style={{ fontFamily: 'monospace', letterSpacing: '0.04em' }}
+          title={lang === 'fa' ? 'ساعت رسمی به وقت تهران (UTC+03:30)' : 'Official Tehran Time (UTC+03:30)'}
+        >
+          <Clock size={13} style={{ color: 'var(--accent)' }} />
+          <span className="server-indicator-text">
+            {lang === 'fa' ? 'تهران' : 'Tehran'} {tehranTime}
+          </span>
+        </div>
 
         <div
           className="server-indicator"

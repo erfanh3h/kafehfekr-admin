@@ -96,11 +96,26 @@ export function formatNumber(n: number | undefined | null, lang: LangCode = 'fa'
   return num.toLocaleString(lang === 'fa' ? 'fa-IR' : 'en-US');
 }
 
+/**
+ * Safely parses ISO datetime string into Date in Tehran timezone (UTC+03:30).
+ * If the string has no timezone offset (naive), it assumes UTC from server and appends 'Z'.
+ */
+function parseToTehranDate(iso: string | undefined | null): Date | null {
+  if (!iso) return null;
+  let str = String(iso).trim();
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(str) && !str.endsWith('Z') && !/[+-]\d{2}:\d{2}$/.test(str)) {
+    str += 'Z';
+  }
+  const d = new Date(str);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 export function formatShortDate(iso: string | undefined | null, lang: LangCode = 'fa'): string {
   if (!iso) return '—';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return String(iso).slice(0, 10);
+  const d = parseToTehranDate(iso);
+  if (!d) return String(iso).slice(0, 10);
   return d.toLocaleDateString(lang === 'fa' ? 'fa-IR' : 'en-US', {
+    timeZone: 'Asia/Tehran',
     month: 'short',
     day: 'numeric',
   });
@@ -108,13 +123,24 @@ export function formatShortDate(iso: string | undefined | null, lang: LangCode =
 
 export function formatDateTime(iso: string | undefined | null, lang: LangCode = 'fa'): string {
   if (!iso) return '—';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return String(iso);
+  const d = parseToTehranDate(iso);
+  if (!d) return String(iso);
   return d.toLocaleString(lang === 'fa' ? 'fa-IR' : 'en-US', {
+    timeZone: 'Asia/Tehran',
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
+  });
+}
+
+export function formatTehranClock(date: Date = new Date(), lang: LangCode = 'fa'): string {
+  return date.toLocaleTimeString(lang === 'fa' ? 'fa-IR' : 'en-US', {
+    timeZone: 'Asia/Tehran',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
   });
 }
 
