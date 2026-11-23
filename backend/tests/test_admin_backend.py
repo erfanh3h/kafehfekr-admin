@@ -284,6 +284,24 @@ class AdminBackendUnitTests(unittest.TestCase):
         with self.assertRaises(HTTPException):
             _normalize_promo_code("ab")
 
+    def test_internal_service_candidate_resolution(self):
+        from services.admin_service import _get_candidate_service_urls, _DETECTED_SERVICE_URLS
+
+        _DETECTED_SERVICE_URLS["backend"] = None
+        _DETECTED_SERVICE_URLS["server"] = None
+
+        backend_candidates = _get_candidate_service_urls("backend")
+        server_candidates = _get_candidate_service_urls("server")
+
+        # Must include standard docker service names and local fallbacks
+        self.assertIn("http://backend:5000", backend_candidates)
+        self.assertIn("http://kafehfekr_backend:5000", backend_candidates)
+        self.assertIn("http://127.0.0.1:5000", backend_candidates)
+
+        self.assertIn("http://server:5001", server_candidates)
+        self.assertIn("http://kafehfekr_server:5001", server_candidates)
+        self.assertIn("http://127.0.0.1:5001", server_candidates)
+
 
 if __name__ == "__main__":
     unittest.main()

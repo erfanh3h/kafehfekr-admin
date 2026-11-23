@@ -270,6 +270,15 @@ export const SystemView: React.FC<SystemViewProps> = ({
                     : '—'}
                 </span>
               </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span className="text-muted">{lang === 'fa' ? 'آدرس اتصال:' : 'Host URL:'}</span>
+                <span style={{ fontSize: 11, opacity: 0.85 }}>{runtime?.backend.url || '—'}</span>
+              </div>
+              {runtime?.backend.error && (
+                <div style={{ fontSize: 10.5, color: 'var(--color-crimson)', wordBreak: 'break-all', marginTop: 2 }}>
+                  {runtime.backend.error}
+                </div>
+              )}
             </div>
           </div>
 
@@ -309,6 +318,15 @@ export const SystemView: React.FC<SystemViewProps> = ({
                 <span className="text-muted">{lang === 'fa' ? 'پینگ Mongo از سرور:' : 'Server Mongo Ping:'}</span>
                 <span>{runtime?.server.mongo_ping_ms != null ? `${runtime.server.mongo_ping_ms} ms` : '—'}</span>
               </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span className="text-muted">{lang === 'fa' ? 'آدرس اتصال:' : 'Host URL:'}</span>
+                <span style={{ fontSize: 11, opacity: 0.85 }}>{runtime?.server.url || '—'}</span>
+              </div>
+              {runtime?.server.error && (
+                <div style={{ fontSize: 10.5, color: 'var(--color-crimson)', wordBreak: 'break-all', marginTop: 2 }}>
+                  {runtime.server.error}
+                </div>
+              )}
             </div>
           </div>
 

@@ -22,10 +22,17 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PORT=5002 \
-    HOST=0.0.0.0
+    HOST=0.0.0.0 \
+    MONGO_URI=mongodb://mongo:27017/ \
+    BACKUP_DIR=/app/Backups/ \
+    BACKEND_INTERNAL_URL=http://backend:5000 \
+    SERVER_INTERNAL_URL=http://server:5001
 
 # Install curl for container health check
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+
+# Create persistent backup directory
+RUN mkdir -p /app/Backups
 
 # Install Python dependencies
 COPY backend/requirements.txt ./backend/

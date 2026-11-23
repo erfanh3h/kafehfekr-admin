@@ -23,8 +23,10 @@ import {
 const STORAGE_KEY_TOKEN = 'kafehfekr_admin_token';
 const STORAGE_KEY_API_URL = 'kafehfekr_admin_api_url';
 const DEFAULT_API_URL =
-  typeof window !== 'undefined' && window.location.port === '5002'
-    ? window.location.origin
+  typeof window !== 'undefined'
+    ? (window.location.port === '5173' || window.location.port === '3000'
+        ? 'http://localhost:5002'
+        : window.location.origin)
     : 'http://localhost:5002';
 
 export class ApiService {

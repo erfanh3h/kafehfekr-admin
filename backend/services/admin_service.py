@@ -669,14 +669,96 @@ def _internal_http_json(
         return False, {"error": str(exc)}
 
 
+_DETECTED_SERVICE_URLS: Dict[str, Optional[str]] = {
+    "backend": None,
+    "server": None,
+}
+
+
+def _get_candidate_service_urls(service: str) -> List[str]:
+    """Returns an ordered list of candidate URLs to reach internal backend or server."""
+    urls: List[str] = []
+
+    # 1. Last successfully detected working URL
+    cached = _DETECTED_SERVICE_URLS.get(service)
+    if cached:
+        urls.append(cached)
+
+    # 2. Configured environment variable
+    env_key = "BACKEND_INTERNAL_URL" if service == "backend" else "SERVER_INTERNAL_URL"
+    configured = os.getenv(env_key)
+    if configured and configured.strip():
+        c_clean = configured.strip().rstrip("/")
+        if c_clean not in urls:
+            urls.append(c_clean)
+
+    # 3. Docker service & container names, Docker gateway, and local fallbacks
+    if service == "backend":
+        defaults = [
+            "http://backend:5000",
+            "http://kafehfekr_backend:5000",
+            "http://kafehfekrbackend:5000",
+            "http://host.docker.internal:5000",
+            "http://172.17.0.1:5000",
+            "http://127.0.0.1:5000",
+            "http://localhost:5000",
+        ]
+    else:
+        defaults = [
+            "http://server:5001",
+            "http://kafehfekr_server:5001",
+            "http://kafehfekrserver:5001",
+            "http://host.docker.internal:5001",
+            "http://172.17.0.1:5001",
+            "http://127.0.0.1:5001",
+            "http://localhost:5001",
+        ]
+
+    for d in defaults:
+        if d not in urls:
+            urls.append(d)
+
+    return urls
+
+
+def _call_internal_service(
+    service: str,
+    path: str,
+    method: str = "GET",
+    payload: Optional[dict] = None,
+    timeout: float = 2.0,
+) -> Tuple[bool, dict, str]:
+    """Calls an internal service with automatic Docker/host candidate URL discovery."""
+    candidates = _get_candidate_service_urls(service)
+    last_err: dict = {"error": "No candidate URLs reachable"}
+    last_url: str = candidates[0] if candidates else ""
+
+    for idx, candidate in enumerate(candidates):
+        last_url = candidate
+        t_out = timeout if idx == 0 else min(timeout, 0.75)
+        ok, data = _internal_http_json(candidate, path, method=method, payload=payload, timeout=t_out)
+        if ok:
+            _DETECTED_SERVICE_URLS[service] = candidate
+            return True, data, candidate
+
+        last_err = data
+        err_str = str(data.get("error", "")).lower()
+        # If the target responded with an HTTP status error (e.g. 401/403/404/500),
+        # the host is reachable and alive.
+        if "http error" in err_str or "status code: 4" in err_str or "status code: 5" in err_str:
+            _DETECTED_SERVICE_URLS[service] = candidate
+            return False, data, candidate
+
+    return False, last_err, last_url
+
+
 def _kick_banned_user_from_realtime(user_id: str, reason: str = "") -> None:
     """Notifies the realtime backend (:5000) to immediately disconnect all active sockets of a banned user."""
-    backend_url = os.getenv("BACKEND_INTERNAL_URL", "http://127.0.0.1:5000").rstrip("/")
     import threading
 
     def _post():
-        ok, res = _internal_http_json(
-            backend_url,
+        ok, res, _ = _call_internal_service(
+            "backend",
             "/internal/auth/force-logout",
             method="POST",
             payload={
@@ -699,15 +781,14 @@ def force_logout_user(user_id: str, reason: str = "", admin_id: str = "") -> dic
     if not user:
         raise HTTPException(status_code=404, detail="کاربر یافت نشد.")
 
-    backend_url = os.getenv("BACKEND_INTERNAL_URL", "http://127.0.0.1:5000").rstrip("/")
     clean_reason = str(reason or "").strip()
     msg = (
         f"شما توسط مدیریت از نشست فعلی خارج شدید: {clean_reason}"
         if clean_reason
         else "شما توسط مدیریت از نشست فعلی خارج شدید. لطفاً مجدداً وارد شوید."
     )
-    ok, res = _internal_http_json(
-        backend_url,
+    ok, res, _ = _call_internal_service(
+        "backend",
         "/internal/auth/force-logout",
         method="POST",
         payload={
@@ -738,11 +819,7 @@ def _emit_realtime_social_notice(user_ids: List[str], title: str, body: str) -> 
     """Pushes a realtime SocialNotification event to connected players via the backend bridge."""
     if not user_ids:
         return
-    backend_url = os.getenv("BACKEND_INTERNAL_URL", "http://127.0.0.1:5000").rstrip("/")
-    secret_key = os.getenv("SECRET_KEY", "09da5e74afaa9ma2565c818195b7b9563b93xc059f6f0f4cab6cf63b88e8d3e7")
-    import json
     import threading
-    import urllib.request
 
     def _post():
         try:
@@ -760,19 +837,13 @@ def _emit_realtime_social_notice(user_ids: List[str], title: str, body: str) -> 
                 }
                 for uid in user_ids[:200]
             ]
-            url = f"{backend_url}/internal/social/emit"
-            payload = json.dumps({"events": events}).encode("utf-8")
-            req = urllib.request.Request(
-                url,
-                data=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Internal-Secret": secret_key,
-                },
+            _call_internal_service(
+                "backend",
+                "/internal/social/emit",
                 method="POST",
+                payload={"events": events},
+                timeout=2.0,
             )
-            with urllib.request.urlopen(req, timeout=1.5) as resp:
-                resp.read()
         except Exception as e:
             print(f"[emit_realtime_notice] Notice: {e}")
 
@@ -999,9 +1070,8 @@ def terminate_game_session(game_play_id: str, admin_id: str = "") -> dict:
         )
 
     # Also force-terminate the live match inside kafehfekrbackend RAM
-    backend_url = os.getenv("BACKEND_INTERNAL_URL", "http://127.0.0.1:5000").rstrip("/")
-    rt_ok, rt_res = _internal_http_json(
-        backend_url,
+    rt_ok, rt_res, _ = _call_internal_service(
+        "backend",
         f"/internal/admin/games/{gid}/force-terminate",
         method="POST",
         payload={},
@@ -1651,11 +1721,21 @@ def get_realtime_runtime_status() -> dict:
     server_url = os.getenv("SERVER_INTERNAL_URL", "http://127.0.0.1:5001").rstrip("/")
 
     t_b0 = time.perf_counter()
-    b_ok, b_data = _internal_http_json(backend_url, "/internal/admin/runtime-status", method="GET", timeout=2.0)
+    b_ok, b_data, b_resolved_url = _call_internal_service(
+        "backend",
+        "/internal/admin/runtime-status",
+        method="GET",
+        timeout=2.0,
+    )
     b_latency_ms = round((time.perf_counter() - t_b0) * 1000, 1)
 
     t_s0 = time.perf_counter()
-    s_ok, s_data = _internal_http_json(server_url, "/internal/admin/health-stats", method="GET", timeout=2.0)
+    s_ok, s_data, s_resolved_url = _call_internal_service(
+        "server",
+        "/internal/admin/health-stats",
+        method="GET",
+        timeout=2.0,
+    )
     s_latency_ms = round((time.perf_counter() - t_s0) * 1000, 1)
 
     mongo_ok = False
@@ -1676,7 +1756,7 @@ def get_realtime_runtime_status() -> dict:
         },
         "backend": {
             "online": b_ok,
-            "url": backend_url,
+            "url": b_resolved_url,
             "latency_ms": b_latency_ms if b_ok else None,
             "uptime_seconds": b_data.get("uptime_seconds", 0) if b_ok else 0,
             "online_social_users": b_data.get("online_social_users", 0) if b_ok else 0,
@@ -1695,7 +1775,7 @@ def get_realtime_runtime_status() -> dict:
         },
         "server": {
             "online": s_ok,
-            "url": server_url,
+            "url": s_resolved_url,
             "latency_ms": s_latency_ms if s_ok else None,
             "uptime_seconds": s_data.get("uptime_seconds", 0) if s_ok else 0,
             "mongo_ok": s_data.get("mongo_ok", False) if s_ok else False,

@@ -17,10 +17,18 @@ services:
       - DEFAULT_ADMIN_USER=${DEFAULT_ADMIN_USER:-admin}
       - DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD:-admin123456}
       - BACKUP_DIR=/app/Backups/
-      - BACKEND_INTERNAL_URL=${BACKEND_INTERNAL_URL:-http://kafehfekr_backend:5000}
-      - SERVER_INTERNAL_URL=${SERVER_INTERNAL_URL:-http://kafehfekr_server:5001}
+      - BACKEND_INTERNAL_URL=${BACKEND_INTERNAL_URL:-http://backend:5000}
+      - SERVER_INTERNAL_URL=${SERVER_INTERNAL_URL:-http://server:5001}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - server_backups:/app/Backups
     networks:
       - kafehfekr_net
+
+volumes:
+  server_backups:
+    external: true
 
 networks:
   kafehfekr_net:
