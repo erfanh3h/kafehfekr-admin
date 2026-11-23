@@ -11,6 +11,8 @@ import { ReportsView } from './components/ReportsView';
 import { AdminsView } from './components/AdminsView';
 import { SystemView } from './components/SystemView';
 import { NotificationsView } from './components/NotificationsView';
+import { QuestionsView } from './components/QuestionsView';
+import { PromosView } from './components/PromosView';
 import { LoginView } from './components/LoginView';
 import { ConfirmModal } from './components/ConfirmModal';
 import { CommandPalette } from './components/CommandPalette';
@@ -333,6 +335,25 @@ export const App: React.FC = () => {
 
           {activeTab === 'notifications' && (
             <NotificationsView
+              onConfirm={setConfirmDialog}
+              onNotify={addToast}
+              lang={lang}
+            />
+          )}
+
+          {activeTab === 'questions' && (
+            <QuestionsView
+              currentAdmin={currentAdmin}
+              onConfirm={setConfirmDialog}
+              onNotify={addToast}
+              lang={lang}
+            />
+          )}
+
+          {activeTab === 'promos' && (
+            <PromosView
+              currentAdmin={currentAdmin}
+              onInspectUserById={(uid) => setInspectedUserId(uid)}
               onConfirm={setConfirmDialog}
               onNotify={addToast}
               lang={lang}

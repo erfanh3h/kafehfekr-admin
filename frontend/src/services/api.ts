@@ -8,8 +8,13 @@ import {
   ClanMemberItem,
   DashboardStats,
   GamePlayItem,
+  PromoCodeItem,
+  PromoRedemptionItem,
   PurchaseItem,
+  QuestionCategoryStat,
+  QuizQuestionItem,
   ReportItem,
+  RuntimeStatus,
   SystemConfig,
   UserFullDetails,
   UserItem,
@@ -220,10 +225,29 @@ export class ApiService {
     });
   }
 
-  public static async toggleBan(userId: string, isActive: boolean, reason?: string): Promise<any> {
+  public static async toggleBan(
+    userId: string,
+    isActive: boolean,
+    reason?: string,
+    durationHours?: number | null
+  ): Promise<any> {
     return this.request(`/admin/users/${encodeURIComponent(userId)}/toggle-ban`, {
       method: 'POST',
-      body: JSON.stringify({ is_active: isActive, reason }),
+      body: JSON.stringify({
+        is_active: isActive,
+        reason,
+        duration_hours: durationHours && durationHours > 0 ? durationHours : null,
+      }),
+    });
+  }
+
+  public static async forceLogoutUser(
+    userId: string,
+    reason?: string
+  ): Promise<{ ok: boolean; user_id: string; reachable: boolean; kicked: number; error?: string | null }> {
+    return this.request(`/admin/users/${encodeURIComponent(userId)}/force-logout`, {
+      method: 'POST',
+      body: JSON.stringify({ reason: reason || '' }),
     });
   }
 
@@ -467,5 +491,138 @@ export class ApiService {
     return this.request(`/admin/system/backups/${encodeURIComponent(filename)}`, {
       method: 'DELETE',
     });
+  }
+
+  public static async getRuntimeStatus(): Promise<RuntimeStatus> {
+    return this.request<RuntimeStatus>('/admin/system/runtime-status');
+  }
+
+  // ---------------- Quiz Question Bank ----------------
+  public static async getQuestionCategories(): Promise<{ total: number; categories: QuestionCategoryStat[] }> {
+    return this.request('/admin/questions/categories');
+  }
+
+  public static async listQuestions(params: {
+    page?: number;
+    limit?: number;
+    search?: string;
+    category_title?: string;
+  }): Promise<{ items: QuizQuestionItem[]; total: number; page: number; limit: number; total_pages: number }> {
+    const q = new URLSearchParams();
+    if (params.page) q.append('page', String(params.page));
+    if (params.limit) q.append('limit', String(params.limit));
+    if (params.search) q.append('search', params.search);
+    if (params.category_title && params.category_title !== 'all') {
+      q.append('category_title', params.category_title);
+    }
+    return this.request(`/admin/questions?${q.toString()}`);
+  }
+
+  public static async createQuestion(payload: {
+    question: string;
+    options: string[];
+    correct: number;
+    category_id?: number;
+    category_title?: string;
+  }): Promise<{ question: QuizQuestionItem }> {
+    return this.request('/admin/questions', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  public static async updateQuestion(
+    questionId: string,
+    payload: {
+      question: string;
+      options: string[];
+      correct: number;
+      category_id?: number;
+      category_title?: string;
+    }
+  ): Promise<{ question: QuizQuestionItem }> {
+    return this.request(`/admin/questions/${encodeURIComponent(questionId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  public static async deleteQuestion(questionId: string): Promise<{ status: string; id: string }> {
+    return this.request(`/admin/questions/${encodeURIComponent(questionId)}`, {
+      method: 'DELETE',
+    });
+  }
+
+  public static async bulkImportQuestions(
+    items: Array<Record<string, any>>
+  ): Promise<{ inserted_count: number; skipped_count: number; errors: string[] }> {
+    return this.request('/admin/questions/bulk-import', {
+      method: 'POST',
+      body: JSON.stringify({ items }),
+    });
+  }
+
+  // ---------------- Promo / Gift Codes ----------------
+  public static async listPromos(params: {
+    page?: number;
+    limit?: number;
+    search?: string;
+    status_filter?: string;
+  }): Promise<{ items: PromoCodeItem[]; total: number; page: number; limit: number; total_pages: number }> {
+    const q = new URLSearchParams();
+    if (params.page) q.append('page', String(params.page));
+    if (params.limit) q.append('limit', String(params.limit));
+    if (params.search) q.append('search', params.search);
+    if (params.status_filter && params.status_filter !== 'all') {
+      q.append('status_filter', params.status_filter);
+    }
+    return this.request(`/admin/promos?${q.toString()}`);
+  }
+
+  public static async createPromo(payload: {
+    code: string;
+    title?: string;
+    reward_coin: number;
+    reward_xp: number;
+    max_uses: number;
+    per_user_limit: number;
+    expires_at?: string | null;
+    is_active?: boolean;
+  }): Promise<{ promo: PromoCodeItem }> {
+    return this.request('/admin/promos', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  public static async updatePromo(
+    promoId: string,
+    payload: Partial<{
+      title: string;
+      reward_coin: number;
+      reward_xp: number;
+      max_uses: number;
+      per_user_limit: number;
+      expires_at: string | null;
+      is_active: boolean;
+    }>
+  ): Promise<{ promo: PromoCodeItem }> {
+    return this.request(`/admin/promos/${encodeURIComponent(promoId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  public static async deletePromo(promoId: string): Promise<{ status: string; promo_id: string }> {
+    return this.request(`/admin/promos/${encodeURIComponent(promoId)}`, {
+      method: 'DELETE',
+    });
+  }
+
+  public static async getPromoRedemptions(
+    promoId: string,
+    limit = 50
+  ): Promise<{ promo: PromoCodeItem; items: PromoRedemptionItem[]; total: number }> {
+    return this.request(`/admin/promos/${encodeURIComponent(promoId)}/redemptions?limit=${limit}`);
   }
 }

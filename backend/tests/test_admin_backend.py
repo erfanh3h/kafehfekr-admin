@@ -233,15 +233,56 @@ class AdminBackendUnitTests(unittest.TestCase):
         expected = {
             "/admin/analytics",
             "/admin/users/bulk-reset-locks",
+            "/admin/users/{user_id}/force-logout",
             "/admin/config/maintenance",
             "/admin/clans/{clan_id}/members/{user_id}",
             "/admin/notifications/send",
             "/admin/notifications/history",
             "/admin/system/backups/{filename}/download",
             "/admin/system/backups/{filename}",
+            "/admin/system/runtime-status",
+            "/admin/questions",
+            "/admin/questions/categories",
+            "/admin/questions/bulk-import",
+            "/admin/questions/{question_id}",
+            "/admin/promos",
+            "/admin/promos/{promo_id}",
+            "/admin/promos/{promo_id}/redemptions",
         }
         for path in expected:
             self.assertIn(path, paths, f"Missing route: {path}")
+
+    def test_question_and_promo_validation(self):
+        from fastapi import HTTPException
+        from services.admin_service import _validate_question_payload, _normalize_promo_code
+
+        valid = _validate_question_payload({
+            "question": "پایتخت ایران کجاست؟",
+            "options": ["تهران", "شیراز", "اصفهان", "تبریز"],
+            "correct": 0,
+            "category_id": 1,
+            "category_title": "جغرافیا",
+        })
+        self.assertEqual(valid["correct"], 0)
+        self.assertEqual(len(valid["options"]), 4)
+
+        with self.assertRaises(HTTPException):
+            _validate_question_payload({
+                "question": "سوال تستی معتبر",
+                "options": ["الف", "ب"],
+                "correct": 0,
+            })
+
+        with self.assertRaises(HTTPException):
+            _validate_question_payload({
+                "question": "سوال تستی معتبر",
+                "options": ["الف", "ب", "ج", "د"],
+                "correct": 5,
+            })
+
+        self.assertEqual(_normalize_promo_code(" nowruz-2026! "), "NOWRUZ-2026")
+        with self.assertRaises(HTTPException):
+            _normalize_promo_code("ab")
 
 
 if __name__ == "__main__":

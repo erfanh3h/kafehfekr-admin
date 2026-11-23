@@ -12,6 +12,8 @@ import {
   Bell,
   Coffee,
   X,
+  HelpCircle,
+  Ticket,
 } from 'lucide-react';
 import { AdminUser, LangCode, NavTab } from '../types';
 import { hasAdminPermission } from '../utils/adminUtils';
@@ -94,6 +96,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
           labelEn: 'Purchases',
           icon: ShoppingBag,
           permission: 'economy:read',
+        },
+        {
+          id: 'promos',
+          labelFa: 'کدهای هدیه و تخفیف',
+          labelEn: 'Promo Codes',
+          icon: Ticket,
+          permission: 'economy:read',
+        },
+        {
+          id: 'questions',
+          labelFa: 'بانک سوالات کوییز',
+          labelEn: 'Quiz Questions',
+          icon: HelpCircle,
+          permission: 'config:read',
         },
       ],
     },

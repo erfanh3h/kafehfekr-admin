@@ -144,9 +144,25 @@ export function formatTehranClock(date: Date = new Date(), lang: LangCode = 'fa'
   });
 }
 
+export function formatDurationSeconds(seconds: number | undefined | null, lang: LangCode = 'fa'): string {
+  const total = Math.max(0, Math.floor(Number(seconds || 0)));
+  const d = Math.floor(total / 86400);
+  const h = Math.floor((total % 86400) / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  if (lang === 'fa') {
+    if (d > 0) return `${formatNumber(d, lang)} روز و ${formatNumber(h, lang)} ساعت`;
+    if (h > 0) return `${formatNumber(h, lang)} ساعت و ${formatNumber(m, lang)} دقیقه`;
+    return `${formatNumber(Math.max(1, m), lang)} دقیقه`;
+  }
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${Math.max(1, m)}m`;
+}
+
 const AUDIT_LABELS: Record<string, { fa: string; en: string }> = {
   adjust_currency: { fa: 'تغییر موجودی بازیکن', en: 'Adjust Currency' },
   toggle_user_status: { fa: 'تغییر وضعیت مسدودی', en: 'Toggle User Ban' },
+  force_logout_user: { fa: 'اخراج فوری از نشست', en: 'Force Logout Player' },
   update_user: { fa: 'ویرایش پروفایل بازیکن', en: 'Update User Profile' },
   reset_user_locks: { fa: 'رفع قفل بازیکن', en: 'Reset User Locks' },
   bulk_reset_locks: { fa: 'رفع قفل گروهی', en: 'Bulk Reset Locks' },
@@ -163,6 +179,13 @@ const AUDIT_LABELS: Record<string, { fa: string; en: string }> = {
   disband_clan: { fa: 'انحلال کلن', en: 'Disband Clan' },
   update_report: { fa: 'رسیدگی به گزارش', en: 'Moderate Report' },
   send_notification: { fa: 'ارسال اعلان درون‌بازی', en: 'Send Notification' },
+  create_question: { fa: 'افزودن سوال کوییز', en: 'Create Quiz Question' },
+  update_question: { fa: 'ویرایش سوال کوییز', en: 'Update Quiz Question' },
+  delete_question: { fa: 'حذف سوال کوییز', en: 'Delete Quiz Question' },
+  bulk_import_questions: { fa: 'ورود گروهی سوالات', en: 'Bulk Import Questions' },
+  create_promo: { fa: 'ایجاد کد هدیه', en: 'Create Promo Code' },
+  update_promo: { fa: 'ویرایش کد هدیه', en: 'Update Promo Code' },
+  delete_promo: { fa: 'حذف کد هدیه', en: 'Delete Promo Code' },
   manual_backup: { fa: 'پشتیبان‌گیری دستی', en: 'Manual Backup' },
   delete_backup: { fa: 'حذف فایل پشتیبان', en: 'Delete Backup' },
   create_admin: { fa: 'ایجاد مدیر جدید', en: 'Create Staff Admin' },

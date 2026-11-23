@@ -32,12 +32,14 @@ const TAB_TITLES: Record<NavTab, { fa: string; en: string }> = {
   users: { fa: 'مدیریت بازیکنان', en: 'Player Management' },
   games: { fa: 'مسابقات و بازی‌ها', en: 'Matches & Live Sessions' },
   clans: { fa: 'کلن‌ها و اتحادها', en: 'Clans & Alliances' },
+  questions: { fa: 'بانک سوالات کوییز', en: 'Quiz Question Bank' },
+  promos: { fa: 'کدهای هدیه و کمپین', en: 'Promo & Gift Codes' },
   notifications: { fa: 'اعلان‌های درون‌بازی', en: 'In-Game Notifications' },
   purchases: { fa: 'تراکنش‌ها و فروشگاه', en: 'Store Purchases' },
   reports: { fa: 'گزارش‌های تخلف', en: 'Moderation Reports' },
   config: { fa: 'تنظیمات و صف بازی', en: 'Config & Queue Control' },
   admins: { fa: 'مدیران و دسترسی‌ها', en: 'Staff & RBAC' },
-  system: { fa: 'پشتیبان و لاگ عملیات', en: 'Backups & Audit Trail' },
+  system: { fa: 'پایش سرور، پشتیبان و لاگ', en: 'Live Health, Backups & Audit' },
 };
 
 export const Navbar: React.FC<NavbarProps> = ({

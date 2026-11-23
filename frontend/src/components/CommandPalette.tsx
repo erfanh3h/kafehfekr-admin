@@ -16,6 +16,8 @@ import {
   Moon,
   ArrowUpRight,
   User,
+  HelpCircle,
+  Ticket,
 } from 'lucide-react';
 import { AdminUser, LangCode, NavTab, ThemeMode, UserItem } from '../types';
 import { ApiService } from '../services/api';
@@ -100,12 +102,14 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     { id: 'users', labelFa: 'مدیریت بازیکنان', labelEn: 'Players Directory', icon: Users, perm: 'users:read' },
     { id: 'games', labelFa: 'مسابقات و بازی‌ها', labelEn: 'Matches & Live Games', icon: Gamepad2, perm: 'games:read' },
     { id: 'clans', labelFa: 'کلن‌ها و اتحادها', labelEn: 'Clans & Alliances', icon: Shield, perm: 'clans:read' },
+    { id: 'promos', labelFa: 'کدهای هدیه و کمپین', labelEn: 'Promo & Gift Codes', icon: Ticket, perm: 'economy:read' },
+    { id: 'questions', labelFa: 'بانک سوالات کوییز', labelEn: 'Quiz Question Bank', icon: HelpCircle, perm: 'config:read' },
     { id: 'notifications', labelFa: 'اعلان‌های درون‌بازی', labelEn: 'In-Game Notifications', icon: Bell, perm: 'notifications:write' },
     { id: 'purchases', labelFa: 'تراکنش‌ها و فروشگاه', labelEn: 'Store Purchases', icon: ShoppingBag, perm: 'economy:read' },
     { id: 'reports', labelFa: 'گزارش‌های تخلف', labelEn: 'Moderation Reports', icon: Flag, perm: 'reports:read' },
     { id: 'config', labelFa: 'تنظیمات و صف بازی', labelEn: 'Config & Queue', icon: SlidersHorizontal, perm: 'config:read' },
     { id: 'admins', labelFa: 'مدیران و دسترسی‌ها', labelEn: 'Staff & RBAC', icon: UserCog, perm: 'admins:manage' },
-    { id: 'system', labelFa: 'پشتیبان و لاگ عملیات', labelEn: 'Backups & Audit Trail', icon: HardDrive, perm: 'dashboard:read' },
+    { id: 'system', labelFa: 'پایش زنده، پشتیبان و لاگ', labelEn: 'Runtime Health, Backups & Audit', icon: HardDrive, perm: 'dashboard:read' },
   ];
 
   const navItems = rawNavItems.filter((i) => !i.perm || hasAdminPermission(currentAdmin, i.perm));

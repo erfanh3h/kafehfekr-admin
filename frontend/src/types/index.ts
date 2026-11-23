@@ -7,6 +7,8 @@ export type NavTab =
   | 'users'
   | 'games'
   | 'clans'
+  | 'questions'
+  | 'promos'
   | 'notifications'
   | 'purchases'
   | 'reports'
@@ -115,6 +117,9 @@ export interface UserItem {
   open_pre_game_id?: string;
   device_id?: string;
   created_clan_id?: string;
+  ban_reason?: string;
+  ban_until?: string | null;
+  ban_duration_hours?: number | null;
 }
 
 export interface UserHistory {
@@ -266,4 +271,92 @@ export interface ConfirmDialogOptions {
   cancelLabel?: string;
   variant?: 'danger' | 'warning' | 'primary';
   onConfirm: () => Promise<void> | void;
+}
+
+export interface RuntimeStatus {
+  checked_at: string;
+  mongodb: {
+    online: boolean;
+    ping_ms: number | null;
+  };
+  backend: {
+    online: boolean;
+    url: string;
+    latency_ms: number | null;
+    uptime_seconds: number;
+    online_social_users: number;
+    social_sockets: number;
+    active_game_sockets: number;
+    active_ram_games_count: number;
+    active_ram_games: Array<{
+      game_id: string;
+      game_types: string[];
+      game_score_type: string;
+      players: Array<{ user_id: string; username: string }>;
+      spectators: number;
+      is_finished: boolean;
+    }>;
+    ranked_queue_count: number;
+    active_pre_games_count: number;
+    multi_queue_count: number;
+    multi_queue_breakdown: Record<string, number>;
+    lobbies_count: number;
+    spectators_count: number;
+    spectator_rooms_count: number;
+    error?: string | null;
+  };
+  server: {
+    online: boolean;
+    url: string;
+    latency_ms: number | null;
+    uptime_seconds: number;
+    mongo_ok: boolean;
+    mongo_ping_ms: number | null;
+    error?: string | null;
+  };
+}
+
+export interface QuizQuestionItem {
+  _id: string;
+  question_id?: number;
+  category_id: number;
+  category_title: string;
+  question: string;
+  options: string[];
+  correct: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface QuestionCategoryStat {
+  category_id: number;
+  category_title: string;
+  count: number;
+}
+
+export interface PromoCodeItem {
+  _id: string;
+  code: string;
+  title: string;
+  reward_coin: number;
+  reward_xp: number;
+  max_uses: number;
+  per_user_limit: number;
+  used_count: number;
+  expires_at?: string | null;
+  is_active: boolean;
+  is_expired?: boolean;
+  is_exhausted?: boolean;
+  created_at?: string;
+}
+
+export interface PromoRedemptionItem {
+  _id: string;
+  promo_id: string;
+  code: string;
+  user_id: string;
+  username?: string;
+  reward_coin: number;
+  reward_xp: number;
+  redeemed_at: string;
 }

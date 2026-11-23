@@ -8,6 +8,7 @@ import {
   ChevronLeft,
   X,
   Ban,
+  Bell,
 } from 'lucide-react';
 import { ApiService } from '../services/api';
 import { AdminUser, LangCode, ReportItem } from '../types';
@@ -40,10 +41,13 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
   const [resolutionAction, setResolutionAction] = useState<'resolved' | 'dismissed'>('resolved');
   const [adminNotes, setAdminNotes] = useState('');
   const [alsoBanTarget, setAlsoBanTarget] = useState(false);
+  const [banDurationHours, setBanDurationHours] = useState<number>(24);
+  const [sendWarningNotice, setSendWarningNotice] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const canManageReports = hasAdminPermission(currentAdmin, 'reports:manage');
   const canBanUsers = hasAdminPermission(currentAdmin, 'users:write');
+  const canSendNotice = hasAdminPermission(currentAdmin, 'notifications:write');
 
   const fetchReports = async () => {
     setLoading(true);
@@ -72,6 +76,8 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
     setResolutionAction(action);
     setAdminNotes('');
     setAlsoBanTarget(false);
+    setBanDurationHours(24);
+    setSendWarningNotice(false);
   };
 
   const handleConfirmResolution = async (e: React.FormEvent) => {
@@ -84,13 +90,28 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
         await ApiService.toggleBan(
           activeReport.target_user_id,
           false,
-          `Report #${activeReport._id}: ${adminNotes.trim() || activeReport.reason}`
+          `Report #${activeReport._id}: ${adminNotes.trim() || activeReport.reason}`,
+          banDurationHours > 0 ? banDurationHours : null
         );
+      }
+      if (sendWarningNotice && activeReport.target_user_id && canSendNotice) {
+        await ApiService.sendNotification({
+          target_type: 'user',
+          user_id: activeReport.target_user_id,
+          title: lang === 'fa' ? 'اخطار رسمی مدیریت کافه فکر' : 'Official Moderation Warning',
+          message:
+            adminNotes.trim() ||
+            (lang === 'fa'
+              ? `بابت گزارش «${activeReport.reason}» به حساب شما اخطار داده شد. لطفاً قوانین بازی را رعایت فرمایید.`
+              : `Your account received a moderation warning regarding "${activeReport.reason}".`),
+        });
       }
       onNotify(
         lang === 'fa'
           ? alsoBanTarget
             ? 'گزارش ثبت و کاربر متخلف مسدود شد.'
+            : sendWarningNotice
+            ? 'گزارش ثبت و اخطار رسمی برای بازیکن ارسال شد.'
             : 'وضعیت گزارش بروزرسانی شد.'
           : alsoBanTarget
           ? 'Report resolved and target player banned.'
@@ -372,6 +393,59 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                 </div>
 
                 {resolutionAction === 'resolved' && canBanUsers && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10 }}>
+                    <label
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        padding: '10px 12px',
+                        borderRadius: 'var(--radius-sm)',
+                        background: alsoBanTarget ? 'var(--crimson-bg)' : 'var(--bg-surface-2)',
+                        border: `1px solid ${alsoBanTarget ? 'rgba(239, 68, 68, 0.3)' : 'var(--border-subtle)'}`,
+                        cursor: 'pointer',
+                        fontSize: 13,
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={alsoBanTarget}
+                        onChange={(e) => setAlsoBanTarget(e.target.checked)}
+                      />
+                      <Ban size={14} className="text-crimson" />
+                      <span>
+                        {lang === 'fa'
+                          ? 'هم‌زمان حساب کاربر گزارش‌شده مسدود شود'
+                          : 'Also ban the reported player immediately'}
+                      </span>
+                    </label>
+
+                    {alsoBanTarget && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingInlineStart: 4 }}>
+                        {(
+                          [
+                            [24, '۲۴ ساعت', '24h'],
+                            [72, '۳ روز', '3d'],
+                            [168, '۷ روز', '7d'],
+                            [720, '۳۰ روز', '30d'],
+                            [0, 'دائمی', 'Permanent'],
+                          ] as const
+                        ).map(([hrs, fa, en]) => (
+                          <button
+                            key={hrs}
+                            type="button"
+                            className={`btn btn-sm ${banDurationHours === hrs ? 'btn-danger-solid' : 'btn-secondary'}`}
+                            onClick={() => setBanDurationHours(hrs)}
+                          >
+                            {lang === 'fa' ? fa : en}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {resolutionAction === 'resolved' && canSendNotice && (
                   <label
                     style={{
                       display: 'flex',
@@ -379,22 +453,22 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                       gap: 8,
                       padding: '10px 12px',
                       borderRadius: 'var(--radius-sm)',
-                      background: alsoBanTarget ? 'var(--crimson-bg)' : 'var(--bg-surface-2)',
-                      border: `1px solid ${alsoBanTarget ? 'rgba(239, 68, 68, 0.3)' : 'var(--border-subtle)'}`,
+                      background: 'var(--bg-surface-2)',
+                      border: '1px solid var(--border-subtle)',
                       cursor: 'pointer',
                       fontSize: 13,
                     }}
                   >
                     <input
                       type="checkbox"
-                      checked={alsoBanTarget}
-                      onChange={(e) => setAlsoBanTarget(e.target.checked)}
+                      checked={sendWarningNotice}
+                      onChange={(e) => setSendWarningNotice(e.target.checked)}
                     />
-                    <Ban size={14} className="text-crimson" />
+                    <Bell size={14} className="text-amber" />
                     <span>
                       {lang === 'fa'
-                        ? 'هم‌زمان حساب کاربر گزارش‌شده مسدود شود'
-                        : 'Also ban the reported player immediately'}
+                        ? 'ارسال اخطار رسمی درون‌بازی به کاربر گزارش‌شده'
+                        : 'Send official in-game warning notice to reported player'}
                     </span>
                   </label>
                 )}

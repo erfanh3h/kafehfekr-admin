@@ -15,10 +15,12 @@ import {
   Copy,
   Users,
   Send,
+  LogOut,
+  Clock,
 } from 'lucide-react';
 import { ApiService } from '../services/api';
 import { AdminUser, ConfirmDialogOptions, LangCode, UserItem } from '../types';
-import { buildCsvContent, formatNumber, hasAdminPermission } from '../utils/adminUtils';
+import { buildCsvContent, formatDateTime, formatNumber, hasAdminPermission } from '../utils/adminUtils';
 
 interface UsersViewProps {
   currentAdmin: AdminUser | null;
@@ -48,6 +50,12 @@ export const UsersView: React.FC<UsersViewProps> = ({
   const [filterType, setFilterType] = useState<'all' | 'real' | 'bot' | 'banned' | 'locked'>('all');
   const [sortBy, setSortBy] = useState('join_date');
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+  // Temporary / Permanent Ban modal state
+  const [banTarget, setBanTarget] = useState<UserItem | null>(null);
+  const [banDurationHours, setBanDurationHours] = useState<number>(24);
+  const [banReason, setBanReason] = useState('');
+  const [banSubmitting, setBanSubmitting] = useState(false);
 
   const canWriteUsers = hasAdminPermission(currentAdmin, 'users:write');
   const canWriteEconomy = hasAdminPermission(currentAdmin, 'economy:write');
@@ -124,28 +132,85 @@ export const UsersView: React.FC<UsersViewProps> = ({
 
   const handleToggleBan = (user: UserItem) => {
     const nextActive = !user.is_active;
+    if (!nextActive) {
+      setBanTarget(user);
+      setBanDurationHours(24);
+      setBanReason('');
+      return;
+    }
     onConfirm({
-      title: nextActive
-        ? lang === 'fa' ? 'رفع مسدودی بازیکن' : 'Unban Player'
-        : lang === 'fa' ? 'مسدود کردن بازیکن' : 'Ban Player',
+      title: lang === 'fa' ? 'رفع مسدودی بازیکن' : 'Unban Player',
       message:
         lang === 'fa'
-          ? `آیا از ${nextActive ? 'رفع مسدودی' : 'مسدود کردن'} حساب «${user.username || user._id}» اطمینان دارید؟`
-          : `Are you sure you want to ${nextActive ? 'unban' : 'ban'} "${user.username || user._id}"?`,
-      variant: nextActive ? 'primary' : 'danger',
-      confirmLabel: nextActive
-        ? lang === 'fa' ? 'رفع مسدودی' : 'Unban'
-        : lang === 'fa' ? 'مسدود کردن' : 'Ban',
+          ? `آیا از رفع مسدودی حساب «${user.username || user._id}» اطمینان دارید؟`
+          : `Are you sure you want to unban "${user.username || user._id}"?`,
+      variant: 'primary',
+      confirmLabel: lang === 'fa' ? 'رفع مسدودی' : 'Unban',
       onConfirm: async () => {
         try {
-          await ApiService.toggleBan(user._id, nextActive, 'Admin action');
+          await ApiService.toggleBan(user._id, true, 'Admin unban');
           onNotify(
             lang === 'fa'
-              ? `وضعیت حساب ${user.username || user._id} تغییر یافت.`
-              : `Updated status for ${user.username || user._id}.`,
+              ? `حساب ${user.username || user._id} رفع مسدودی شد.`
+              : `Unbanned ${user.username || user._id}.`,
             'success'
           );
           fetchUsers();
+        } catch (err: any) {
+          onNotify(err.message, 'error');
+        }
+      },
+    });
+  };
+
+  const handleConfirmBanModal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!banTarget) return;
+    setBanSubmitting(true);
+    try {
+      await ApiService.toggleBan(
+        banTarget._id,
+        false,
+        banReason.trim() || 'Admin moderation',
+        banDurationHours > 0 ? banDurationHours : null
+      );
+      onNotify(
+        lang === 'fa'
+          ? `بازیکن ${banTarget.username || banTarget._id} مسدود شد.`
+          : `Banned ${banTarget.username || banTarget._id}.`,
+        'success'
+      );
+      setBanTarget(null);
+      fetchUsers();
+    } catch (err: any) {
+      onNotify(err.message, 'error');
+    } finally {
+      setBanSubmitting(false);
+    }
+  };
+
+  const handleForceLogout = (user: UserItem) => {
+    onConfirm({
+      title: lang === 'fa' ? 'اخراج فوری از نشست آنلاین' : 'Force Logout Online Session',
+      message:
+        lang === 'fa'
+          ? `تمام اتصالات آنلاین «${user.username || user._id}» بلافاصله قطع می‌شود (بدون مسدود کردن حساب). ادامه می‌دهید؟`
+          : `Disconnect all active sockets for "${user.username || user._id}" without banning?`,
+      variant: 'warning',
+      confirmLabel: lang === 'fa' ? 'قطع نشست' : 'Force Logout',
+      onConfirm: async () => {
+        try {
+          const res = await ApiService.forceLogoutUser(user._id, 'Admin kick');
+          onNotify(
+            res.reachable
+              ? lang === 'fa'
+                ? `نشست بازیکن قطع شد (${formatNumber(res.kicked, lang)} اتصال).`
+                : `Disconnected ${res.kicked} socket(s).`
+              : lang === 'fa'
+              ? 'سرور ریل‌تایم در دسترس نبود.'
+              : 'Realtime backend unreachable.',
+            res.reachable ? 'success' : 'info'
+          );
         } catch (err: any) {
           onNotify(err.message, 'error');
         }
@@ -464,6 +529,12 @@ export const UsersView: React.FC<UsersViewProps> = ({
                             ? lang === 'fa' ? 'مسدود' : 'Banned'
                             : lang === 'fa' ? 'فعال' : 'Active'}
                         </span>
+                        {u.is_active === false && u.ban_until && (
+                          <span className="mono text-muted" style={{ fontSize: 10.5, display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                            <Clock size={10} />
+                            {formatDateTime(u.ban_until, lang)}
+                          </span>
+                        )}
                         {isLocked && (
                           <span className="status-label amber" style={{ fontSize: 11.5 }}>
                             {lang === 'fa' ? 'قفل بازی فعال' : 'Locked in match'}
@@ -515,6 +586,17 @@ export const UsersView: React.FC<UsersViewProps> = ({
                             <LockOpen size={14} className="text-amber" />
                           </button>
                         )}
+                        {canWriteUsers && !isBot && (
+                          <button
+                            type="button"
+                            className="btn-icon sm"
+                            onClick={() => handleForceLogout(u)}
+                            title={lang === 'fa' ? 'اخراج فوری از نشست (Kick)' : 'Force Logout (Kick)'}
+                            aria-label={`Force logout ${u.username || u._id}`}
+                          >
+                            <LogOut size={14} className="text-amber" />
+                          </button>
+                        )}
                         {canWriteUsers && (
                           <button
                             type="button"
@@ -523,7 +605,7 @@ export const UsersView: React.FC<UsersViewProps> = ({
                             title={
                               u.is_active === false
                                 ? lang === 'fa' ? 'رفع مسدودی' : 'Unban'
-                                : lang === 'fa' ? 'مسدود کردن' : 'Ban'
+                                : lang === 'fa' ? 'مسدود کردن (موقت / دائم)' : 'Ban (Temp / Perm)'
                             }
                             aria-label={`${u.is_active === false ? 'Unban' : 'Ban'} ${u.username || u._id}`}
                           >
@@ -584,6 +666,85 @@ export const UsersView: React.FC<UsersViewProps> = ({
           </div>
         )}
       </div>
+
+      {/* Ban Modal (Temporary / Permanent) */}
+      {banTarget && (
+        <div
+          className="modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => !banSubmitting && setBanTarget(null)}
+        >
+          <div className="modal-content modal-sm" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-title">
+                <Ban size={17} className="text-crimson" />
+                <span>{lang === 'fa' ? 'مسدود کردن بازیکن' : 'Ban Player'}</span>
+              </div>
+              <button type="button" className="btn-icon sm" onClick={() => setBanTarget(null)}>
+                <X size={16} />
+              </button>
+            </div>
+            <form onSubmit={handleConfirmBanModal}>
+              <div className="modal-body">
+                <div style={{ marginBottom: 12, fontSize: 13 }}>
+                  <span className="text-muted">{lang === 'fa' ? 'بازیکن:' : 'Player:'}</span>{' '}
+                  <strong>{banTarget.username || banTarget._id}</strong>{' '}
+                  <span className="mono text-muted">({banTarget._id})</span>
+                </div>
+
+                <div className="input-group">
+                  <label className="input-label">{lang === 'fa' ? 'مدت زمان مسدودی' : 'Ban Duration'}</label>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {(
+                      [
+                        [1, '۱ ساعت', '1h'],
+                        [24, '۲۴ ساعت', '24h'],
+                        [72, '۳ روز', '3d'],
+                        [168, '۷ روز', '7d'],
+                        [720, '۳۰ روز', '30d'],
+                        [0, 'دائمی', 'Permanent'],
+                      ] as const
+                    ).map(([hrs, fa, en]) => (
+                      <button
+                        key={hrs}
+                        type="button"
+                        className={`btn btn-sm ${banDurationHours === hrs ? 'btn-danger-solid' : 'btn-secondary'}`}
+                        onClick={() => setBanDurationHours(hrs)}
+                      >
+                        {lang === 'fa' ? fa : en}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="input-group">
+                  <label className="input-label">{lang === 'fa' ? 'علت مسدودی' : 'Ban Reason'}</label>
+                  <input
+                    type="text"
+                    className="input-field"
+                    value={banReason}
+                    onChange={(e) => setBanReason(e.target.value)}
+                    placeholder={lang === 'fa' ? 'مثلاً تقلب یا توهین در چت...' : 'e.g. Cheating or chat abuse...'}
+                  />
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn btn-secondary" onClick={() => setBanTarget(null)} disabled={banSubmitting}>
+                  {lang === 'fa' ? 'انصراف' : 'Cancel'}
+                </button>
+                <button type="submit" className="btn btn-danger-solid" disabled={banSubmitting}>
+                  {banSubmitting
+                    ? lang === 'fa' ? 'در حال اعمال...' : 'Banning...'
+                    : banDurationHours === 0
+                    ? lang === 'fa' ? 'مسدودی دائمی' : 'Ban Permanently'
+                    : lang === 'fa' ? 'اعمال مسدودی موقت' : 'Apply Temp Ban'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

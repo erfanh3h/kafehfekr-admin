@@ -17,6 +17,8 @@ services:
       - DEFAULT_ADMIN_USER=${DEFAULT_ADMIN_USER:-admin}
       - DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD:-admin123456}
       - BACKUP_DIR=/app/Backups/
+      - BACKEND_INTERNAL_URL=${BACKEND_INTERNAL_URL:-http://kafehfekr_backend:5000}
+      - SERVER_INTERNAL_URL=${SERVER_INTERNAL_URL:-http://kafehfekr_server:5001}
     networks:
       - kafehfekr_net
 

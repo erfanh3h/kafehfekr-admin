@@ -15,6 +15,7 @@ import {
   Trophy,
   Wrench,
   Bell,
+  Radio,
 } from 'lucide-react';
 import {
   AdminUser,
@@ -23,7 +24,7 @@ import {
   DashboardStats,
   LangCode,
   NavTab,
-  UserItem,
+  RuntimeStatus,
 } from '../types';
 import { ApiService } from '../services/api';
 import {
@@ -61,6 +62,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   lang,
 }) => {
   const [analytics, setAnalytics] = useState<AnalyticsOverview | null>(null);
+  const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [days, setDays] = useState<7 | 14 | 30>(14);
   const [metric, setMetric] = useState<TrendMetric>('matches');
@@ -86,13 +88,24 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     }
   };
 
+  const fetchRuntime = async () => {
+    try {
+      const res = await ApiService.getRuntimeStatus();
+      setRuntime(res);
+    } catch {
+      // Optional telemetry
+    }
+  };
+
   useEffect(() => {
     fetchAnalytics(days);
+    fetchRuntime();
   }, [days]);
 
   const handleRefreshAll = () => {
     onRefresh();
     fetchAnalytics(days);
+    fetchRuntime();
   };
 
   const handleToggleQueue = async () => {
@@ -281,6 +294,50 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               </button>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Live Runtime Telemetry Strip */}
+      {runtime && (
+        <div
+          className="card"
+          style={{
+            marginBottom: 16,
+            padding: '10px 14px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 10,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', fontSize: 12.5 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: 600 }}>
+              <Radio size={14} className={runtime.backend.online ? 'text-emerald' : 'text-crimson'} />
+              <span>{lang === 'fa' ? 'پایش زنده:' : 'Live Telemetry:'}</span>
+            </span>
+            <span className="meta-inline">
+              <span>{lang === 'fa' ? 'آنلاین:' : 'Online:'}</span>
+              <strong className="mono text-emerald">{formatNumber(runtime.backend.online_social_users, lang)}</strong>
+            </span>
+            <span className="meta-inline">
+              <span>{lang === 'fa' ? 'بازی در RAM:' : 'RAM Matches:'}</span>
+              <strong className="mono text-accent">{formatNumber(runtime.backend.active_ram_games_count, lang)}</strong>
+            </span>
+            <span className="meta-inline">
+              <span>{lang === 'fa' ? 'در صف:' : 'In Queue:'}</span>
+              <strong className="mono text-sapphire">
+                {formatNumber(runtime.backend.ranked_queue_count + runtime.backend.multi_queue_count, lang)}
+              </strong>
+            </span>
+            <span className="meta-inline">
+              <span>{lang === 'fa' ? 'تماشاگر:' : 'Spectators:'}</span>
+              <strong className="mono">{formatNumber(runtime.backend.spectators_count, lang)}</strong>
+            </span>
+          </div>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => onNavigateTab('system')}>
+            {lang === 'fa' ? 'جزئیات سرویس‌ها' : 'Service Health'}
+          </button>
         </div>
       )}
 

@@ -27,6 +27,9 @@ class AdminDatabase:
         self.admin_broadcasts = self.db["admin_broadcasts"]
         self.admins_col = self.db["admins"]
         self.audit_logs = self.db["admin_audit_logs"]
+        self.questions = self.db["questions"]
+        self.promo_codes = self.db["promo_codes"]
+        self.promo_redemptions = self.db["promo_redemptions"]
 
         self.admin_manager = AdminCollectionManager(self.admins_col)
 
@@ -35,6 +38,8 @@ class AdminDatabase:
             default_user = (os.getenv("DEFAULT_ADMIN_USERNAME") or os.getenv("DEFAULT_ADMIN_USER") or "admin").strip()
             default_pass = os.getenv("DEFAULT_ADMIN_PASSWORD", "admin123456").strip()
             self.admin_manager.ensure_default_superadmin(default_user, default_pass)
+            self.promo_codes.create_index("code", unique=True)
+            self.promo_redemptions.create_index([("promo_id", 1), ("user_id", 1)])
         except Exception as e:
             print(f"[AdminDatabase] Init notice: {e}")
 

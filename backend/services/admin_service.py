@@ -639,37 +639,99 @@ def adjust_user_currency(user_id: str, field: str, amount: int, reason: str = ""
     }
 
 
+def _internal_http_json(
+    base_url: str,
+    path: str,
+    method: str = "GET",
+    payload: Optional[dict] = None,
+    timeout: float = 2.0,
+) -> Tuple[bool, dict]:
+    """Performs an authenticated internal JSON request to backend (:5000) or server (:5001)."""
+    import json
+    import urllib.request
+
+    secret_key = os.getenv("SECRET_KEY", "09da5e74afaa9ma2565c818195b7b9563b93xc059f6f0f4cab6cf63b88e8d3e7")
+    url = f"{base_url.rstrip('/')}{path}"
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    headers = {
+        "X-Internal-Secret": secret_key,
+        "Accept": "application/json",
+    }
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+            return True, (json.loads(raw) if raw.strip() else {})
+    except Exception as exc:
+        return False, {"error": str(exc)}
+
+
 def _kick_banned_user_from_realtime(user_id: str, reason: str = "") -> None:
     """Notifies the realtime backend (:5000) to immediately disconnect all active sockets of a banned user."""
     backend_url = os.getenv("BACKEND_INTERNAL_URL", "http://127.0.0.1:5000").rstrip("/")
-    secret_key = os.getenv("SECRET_KEY", "09da5e74afaa9ma2565c818195b7b9563b93xc059f6f0f4cab6cf63b88e8d3e7")
-    import json
     import threading
-    import urllib.request
 
     def _post():
-        try:
-            url = f"{backend_url}/internal/auth/force-logout"
-            payload = json.dumps({
+        ok, res = _internal_http_json(
+            backend_url,
+            "/internal/auth/force-logout",
+            method="POST",
+            payload={
                 "user_id": str(user_id),
                 "reason": "banned",
                 "message": f"حساب کاربری شما مسدود شد: {reason}" if reason else "حساب کاربری شما توسط مدیریت مسدود شده است.",
-            }).encode("utf-8")
-            req = urllib.request.Request(
-                url,
-                data=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Internal-Secret": secret_key,
-                },
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=1.5) as resp:
-                resp.read()
-        except Exception as e:
-            print(f"[kick_banned_user] Notice: {e}")
+            },
+            timeout=1.5,
+        )
+        if not ok:
+            print(f"[kick_banned_user] Notice: {res.get('error')}")
 
     threading.Thread(target=_post, daemon=True).start()
+
+
+def force_logout_user(user_id: str, reason: str = "", admin_id: str = "") -> dict:
+    """Immediately disconnects all active Socket.IO connections of a player without banning them."""
+    uid = str(user_id)
+    user = db.users.find_one({"_id": uid}, {"username": 1})
+    if not user:
+        raise HTTPException(status_code=404, detail="کاربر یافت نشد.")
+
+    backend_url = os.getenv("BACKEND_INTERNAL_URL", "http://127.0.0.1:5000").rstrip("/")
+    clean_reason = str(reason or "").strip()
+    msg = (
+        f"شما توسط مدیریت از نشست فعلی خارج شدید: {clean_reason}"
+        if clean_reason
+        else "شما توسط مدیریت از نشست فعلی خارج شدید. لطفاً مجدداً وارد شوید."
+    )
+    ok, res = _internal_http_json(
+        backend_url,
+        "/internal/auth/force-logout",
+        method="POST",
+        payload={
+            "user_id": uid,
+            "reason": "admin_kick",
+            "message": msg,
+        },
+        timeout=2.5,
+    )
+    kicked = int(res.get("kicked", 0) or 0) if ok else 0
+    _log_admin_action(admin_id, "force_logout_user", {
+        "user_id": uid,
+        "username": user.get("username"),
+        "reason": clean_reason,
+        "reachable": ok,
+        "kicked": kicked,
+    })
+    return {
+        "ok": True,
+        "user_id": uid,
+        "reachable": ok,
+        "kicked": kicked,
+        "error": None if ok else res.get("error"),
+    }
 
 
 def _emit_realtime_social_notice(user_ids: List[str], title: str, body: str) -> None:
@@ -717,32 +779,46 @@ def _emit_realtime_social_notice(user_ids: List[str], title: str, body: str) -> 
     threading.Thread(target=_post, daemon=True).start()
 
 
-def toggle_user_ban(user_id: str, is_active: bool, reason: str = "", admin_id: str = "") -> dict:
+def toggle_user_ban(
+    user_id: str,
+    is_active: bool,
+    reason: str = "",
+    duration_hours: Optional[int] = None,
+    admin_id: str = "",
+) -> dict:
     uid = str(user_id)
     user = db.users.find_one({"_id": uid})
     if not user:
         raise HTTPException(status_code=404, detail="کاربر یافت نشد.")
 
-    now = datetime.now()
+    now_utc = datetime.now(timezone.utc)
+    ban_until = None
     if not is_active:
-        # Banning user: mark inactive and banned, clear any live game locks
-        db.users.find_one_and_update(
-            {"_id": uid},
-            {
-                "$set": {
-                    "is_active": False,
-                    "is_banned": True,
-                    "ban_reason": str(reason or ""),
-                    "banned_at": now,
-                    "open_game_id": "",
-                    "open_pre_game_id": "",
-                }
-            },
-        )
+        set_doc: dict = {
+            "is_active": False,
+            "is_banned": True,
+            "ban_reason": str(reason or ""),
+            "banned_at": now_utc,
+            "open_game_id": "",
+            "open_pre_game_id": "",
+        }
+        unset_doc: dict = {}
+        if duration_hours is not None and int(duration_hours) > 0:
+            hrs = int(duration_hours)
+            ban_until = now_utc + timedelta(hours=hrs)
+            set_doc["ban_until"] = ban_until
+            set_doc["ban_duration_hours"] = hrs
+        else:
+            unset_doc["ban_until"] = ""
+            unset_doc["ban_duration_hours"] = ""
+
+        update_op: dict = {"$set": set_doc}
+        if unset_doc:
+            update_op["$unset"] = unset_doc
+        db.users.find_one_and_update({"_id": uid}, update_op)
         # Terminate live matches & force logout active sockets in realtime backend
         _kick_banned_user_from_realtime(uid, reason)
     else:
-        # Unbanning user
         db.users.find_one_and_update(
             {"_id": uid},
             {
@@ -753,6 +829,8 @@ def toggle_user_ban(user_id: str, is_active: bool, reason: str = "", admin_id: s
                 "$unset": {
                     "ban_reason": "",
                     "banned_at": "",
+                    "ban_until": "",
+                    "ban_duration_hours": "",
                 },
             },
         )
@@ -761,10 +839,17 @@ def toggle_user_ban(user_id: str, is_active: bool, reason: str = "", admin_id: s
         "user_id": uid,
         "is_active": is_active,
         "is_banned": not is_active,
+        "duration_hours": int(duration_hours) if (not is_active and duration_hours and int(duration_hours) > 0) else None,
+        "ban_until": ban_until.isoformat() if ban_until else None,
         "reason": reason,
     })
 
-    return {"user_id": uid, "is_active": is_active, "is_banned": not is_active}
+    return {
+        "user_id": uid,
+        "is_active": is_active,
+        "is_banned": not is_active,
+        "ban_until": ban_until.isoformat() if ban_until else None,
+    }
 
 
 def reset_user_locks(user_id: str, admin_id: str = "") -> dict:
@@ -913,8 +998,30 @@ def terminate_game_session(game_play_id: str, admin_id: str = "") -> dict:
             {"$set": {"open_game_id": ""}}
         )
 
-    _log_admin_action(admin_id, "terminate_game", {"game_id": gid, "released_users": user_ids})
-    return {"game_id": gid, "status": "terminated", "released_users": user_ids}
+    # Also force-terminate the live match inside kafehfekrbackend RAM
+    backend_url = os.getenv("BACKEND_INTERNAL_URL", "http://127.0.0.1:5000").rstrip("/")
+    rt_ok, rt_res = _internal_http_json(
+        backend_url,
+        f"/internal/admin/games/{gid}/force-terminate",
+        method="POST",
+        payload={},
+        timeout=2.0,
+    )
+
+    _log_admin_action(admin_id, "terminate_game", {
+        "game_id": gid,
+        "released_users": user_ids,
+        "realtime_reachable": rt_ok,
+        "existed_in_ram": rt_res.get("existed_in_ram") if rt_ok else None,
+        "disconnected_sockets": rt_res.get("disconnected_sockets") if rt_ok else 0,
+    })
+    return {
+        "game_id": gid,
+        "status": "terminated",
+        "released_users": user_ids,
+        "realtime_terminated": bool(rt_ok),
+        "disconnected_sockets": int(rt_res.get("disconnected_sockets", 0) or 0) if rt_ok else 0,
+    }
 
 
 def cleanup_stuck_games(max_age_minutes: int = 120, admin_id: str = "") -> dict:
@@ -1405,6 +1512,9 @@ def trigger_manual_backup(admin_id: str = "") -> dict:
             "clan_members",
             "social_reports",
             "admins",
+            "questions",
+            "promo_codes",
+            "promo_redemptions",
         ]
         for coll_name in collections:
             with open(os.path.join(target_path, f"{coll_name}.bson"), "wb+") as f:
@@ -1527,3 +1637,497 @@ def _log_admin_action(admin_id: str, action: str, details: dict):
         })
     except Exception as e:
         print(f"[AdminAudit] Error saving audit log: {e}")
+
+
+# -------------------------------------------------------------
+# Realtime Services & Runtime Telemetry
+# -------------------------------------------------------------
+
+def get_realtime_runtime_status() -> dict:
+    """Aggregates live RAM telemetry from kafehfekrbackend (:5000), kafehfekrserver (:5001), and MongoDB."""
+    import time
+
+    backend_url = os.getenv("BACKEND_INTERNAL_URL", "http://127.0.0.1:5000").rstrip("/")
+    server_url = os.getenv("SERVER_INTERNAL_URL", "http://127.0.0.1:5001").rstrip("/")
+
+    t_b0 = time.perf_counter()
+    b_ok, b_data = _internal_http_json(backend_url, "/internal/admin/runtime-status", method="GET", timeout=2.0)
+    b_latency_ms = round((time.perf_counter() - t_b0) * 1000, 1)
+
+    t_s0 = time.perf_counter()
+    s_ok, s_data = _internal_http_json(server_url, "/internal/admin/health-stats", method="GET", timeout=2.0)
+    s_latency_ms = round((time.perf_counter() - t_s0) * 1000, 1)
+
+    mongo_ok = False
+    mongo_ping_ms = None
+    try:
+        t_m0 = time.perf_counter()
+        db.client.admin.command("ping")
+        mongo_ping_ms = round((time.perf_counter() - t_m0) * 1000, 1)
+        mongo_ok = True
+    except Exception:
+        mongo_ok = False
+
+    return {
+        "checked_at": now_tehran().isoformat(),
+        "mongodb": {
+            "online": mongo_ok,
+            "ping_ms": mongo_ping_ms,
+        },
+        "backend": {
+            "online": b_ok,
+            "url": backend_url,
+            "latency_ms": b_latency_ms if b_ok else None,
+            "uptime_seconds": b_data.get("uptime_seconds", 0) if b_ok else 0,
+            "online_social_users": b_data.get("online_social_users", 0) if b_ok else 0,
+            "social_sockets": b_data.get("social_sockets", 0) if b_ok else 0,
+            "active_game_sockets": b_data.get("active_game_sockets", 0) if b_ok else 0,
+            "active_ram_games_count": b_data.get("active_ram_games_count", 0) if b_ok else 0,
+            "active_ram_games": b_data.get("active_ram_games", []) if b_ok else [],
+            "ranked_queue_count": b_data.get("ranked_queue_count", 0) if b_ok else 0,
+            "active_pre_games_count": b_data.get("active_pre_games_count", 0) if b_ok else 0,
+            "multi_queue_count": b_data.get("multi_queue_count", 0) if b_ok else 0,
+            "multi_queue_breakdown": b_data.get("multi_queue_breakdown", {}) if b_ok else {},
+            "lobbies_count": b_data.get("lobbies_count", 0) if b_ok else 0,
+            "spectators_count": b_data.get("spectators_count", 0) if b_ok else 0,
+            "spectator_rooms_count": b_data.get("spectator_rooms_count", 0) if b_ok else 0,
+            "error": None if b_ok else b_data.get("error"),
+        },
+        "server": {
+            "online": s_ok,
+            "url": server_url,
+            "latency_ms": s_latency_ms if s_ok else None,
+            "uptime_seconds": s_data.get("uptime_seconds", 0) if s_ok else 0,
+            "mongo_ok": s_data.get("mongo_ok", False) if s_ok else False,
+            "mongo_ping_ms": s_data.get("mongo_ping_ms") if s_ok else None,
+            "error": None if s_ok else s_data.get("error"),
+        },
+    }
+
+
+# -------------------------------------------------------------
+# Quiz Question Bank Management
+# -------------------------------------------------------------
+
+def _validate_question_payload(data: dict) -> dict:
+    question_text = str(data.get("question") or "").strip()
+    if len(question_text) < 3:
+        raise HTTPException(status_code=400, detail="متن سوال باید حداقل ۳ کاراکتر باشد.")
+
+    raw_options = data.get("options")
+    if not isinstance(raw_options, list) or len(raw_options) != 4:
+        raise HTTPException(status_code=400, detail="هر سوال باید دقیقاً ۴ گزینه داشته باشد.")
+    options = [str(opt or "").strip() for opt in raw_options]
+    if any(not opt for opt in options):
+        raise HTTPException(status_code=400, detail="هیچ‌یک از ۴ گزینه نمی‌تواند خالی باشد.")
+
+    try:
+        correct = int(data.get("correct"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="گزینه صحیح باید عددی بین ۰ تا ۳ باشد.")
+    if correct < 0 or correct > 3:
+        raise HTTPException(status_code=400, detail="گزینه صحیح باید بین ۰ تا ۳ باشد.")
+
+    try:
+        category_id = int(data.get("category_id", 0) or 0)
+    except (TypeError, ValueError):
+        category_id = 0
+    category_title = str(data.get("category_title") or "اطلاعات عمومی").strip() or "اطلاعات عمومی"
+
+    return {
+        "category_id": category_id,
+        "category_title": category_title,
+        "question": question_text,
+        "options": options,
+        "correct": correct,
+    }
+
+
+def _question_id_filter(raw_id: str) -> dict:
+    clean = str(raw_id or "").strip()
+    ors: List[dict] = [{"_id": clean}]
+    try:
+        if ObjectId.is_valid(clean):
+            ors.append({"_id": ObjectId(clean)})
+    except Exception:
+        pass
+    if clean.isdigit():
+        ors.append({"question_id": int(clean)})
+    return {"$or": ors} if len(ors) > 1 else ors[0]
+
+
+def get_question_categories() -> dict:
+    total = db.questions.count_documents({})
+    categories: List[dict] = []
+    try:
+        agg = db.questions.aggregate([
+            {
+                "$group": {
+                    "_id": {
+                        "category_id": {"$ifNull": ["$category_id", 0]},
+                        "category_title": {"$ifNull": ["$category_title", "اطلاعات عمومی"]},
+                    },
+                    "count": {"$sum": 1},
+                }
+            },
+            {"$sort": {"count": -1}},
+        ])
+        for row in agg:
+            key = row.get("_id") or {}
+            categories.append({
+                "category_id": int(key.get("category_id", 0) or 0),
+                "category_title": str(key.get("category_title") or "اطلاعات عمومی"),
+                "count": int(row.get("count", 0) or 0),
+            })
+    except Exception:
+        counts: Dict[Tuple[int, str], int] = {}
+        for doc in db.questions.find({}, {"category_id": 1, "category_title": 1}):
+            k = (int(doc.get("category_id", 0) or 0), str(doc.get("category_title") or "اطلاعات عمومی"))
+            counts[k] = counts.get(k, 0) + 1
+        categories = [
+            {"category_id": cid, "category_title": title, "count": cnt}
+            for (cid, title), cnt in sorted(counts.items(), key=lambda x: x[1], reverse=True)
+        ]
+    return {"total": total, "categories": categories}
+
+
+def list_questions(
+    page: int = 1,
+    limit: int = 25,
+    search: Optional[str] = None,
+    category_title: Optional[str] = None,
+    category_id: Optional[int] = None,
+) -> dict:
+    conditions: List[dict] = []
+    if category_id is not None:
+        conditions.append({"category_id": int(category_id)})
+    if category_title and str(category_title).strip() and category_title != "all":
+        conditions.append({"category_title": str(category_title).strip()})
+    if search and str(search).strip():
+        esc = _escape_regex(search)
+        conditions.append({
+            "$or": [
+                {"question": {"$regex": esc, "$options": "i"}},
+                {"category_title": {"$regex": esc, "$options": "i"}},
+                {"options": {"$regex": esc, "$options": "i"}},
+            ]
+        })
+
+    if len(conditions) == 0:
+        query: dict = {}
+    elif len(conditions) == 1:
+        query = conditions[0]
+    else:
+        query = {"$and": conditions}
+
+    total = db.questions.count_documents(query)
+    safe_limit = max(1, min(int(limit or 25), 100))
+    skip = max(0, (max(1, int(page or 1)) - 1) * safe_limit)
+    cursor = db.questions.find(query).sort([("question_id", -1), ("_id", -1)]).skip(skip).limit(safe_limit)
+    items = [_clean_doc(doc) for doc in cursor]
+
+    return {
+        "items": items,
+        "total": total,
+        "page": max(1, int(page or 1)),
+        "limit": safe_limit,
+        "total_pages": max(1, (total + safe_limit - 1) // safe_limit),
+    }
+
+
+def _next_question_id() -> int:
+    try:
+        top = list(db.questions.find({}, {"question_id": 1}).sort([("question_id", -1)]).limit(1))
+        if top and isinstance(top[0].get("question_id"), int):
+            return int(top[0]["question_id"]) + 1
+    except Exception:
+        pass
+    return int(datetime.now().timestamp())
+
+
+def create_question(data: dict, admin_id: str = "") -> dict:
+    clean = _validate_question_payload(data)
+    qid = data.get("question_id")
+    if qid is None:
+        qid = _next_question_id()
+    else:
+        try:
+            qid = int(qid)
+        except (TypeError, ValueError):
+            qid = _next_question_id()
+
+    doc = {
+        "question_id": qid,
+        **clean,
+        "created_at": datetime.now(timezone.utc),
+        "created_by": str(admin_id or "system"),
+    }
+    res = db.questions.insert_one(doc)
+    inserted_id = getattr(res, "inserted_id", None)
+    if inserted_id is not None:
+        doc["_id"] = inserted_id
+    _log_admin_action(admin_id, "create_question", {
+        "question_id": qid,
+        "category_title": clean["category_title"],
+        "question": clean["question"][:80],
+    })
+    return _clean_doc(doc)
+
+
+def update_question(question_doc_id: str, data: dict, admin_id: str = "") -> dict:
+    filt = _question_id_filter(question_doc_id)
+    existing = db.questions.find_one(filt)
+    if not existing:
+        raise HTTPException(status_code=404, detail="سوال یافت نشد.")
+
+    merged = {
+        "question": data.get("question", existing.get("question")),
+        "options": data.get("options", existing.get("options")),
+        "correct": data.get("correct", existing.get("correct")),
+        "category_id": data.get("category_id", existing.get("category_id", 0)),
+        "category_title": data.get("category_title", existing.get("category_title", "اطلاعات عمومی")),
+    }
+    clean = _validate_question_payload(merged)
+    clean["updated_at"] = datetime.now(timezone.utc)
+    db.questions.update_one({"_id": existing["_id"]}, {"$set": clean})
+    _log_admin_action(admin_id, "update_question", {
+        "question_id": existing.get("question_id", str(existing["_id"])),
+        "category_title": clean["category_title"],
+    })
+    return _clean_doc(db.questions.find_one({"_id": existing["_id"]}))
+
+
+def delete_question(question_doc_id: str, admin_id: str = "") -> dict:
+    filt = _question_id_filter(question_doc_id)
+    existing = db.questions.find_one(filt)
+    if not existing:
+        raise HTTPException(status_code=404, detail="سوال یافت نشد.")
+    db.questions.delete_one({"_id": existing["_id"]})
+    _log_admin_action(admin_id, "delete_question", {
+        "question_id": existing.get("question_id", str(existing["_id"])),
+        "question": str(existing.get("question") or "")[:80],
+    })
+    return {"status": "deleted", "id": str(existing["_id"])}
+
+
+def bulk_import_questions(items: List[dict], admin_id: str = "") -> dict:
+    if not isinstance(items, list) or len(items) == 0:
+        raise HTTPException(status_code=400, detail="لیست سوالات برای ورود گروهی خالی است.")
+    if len(items) > 1000:
+        raise HTTPException(status_code=400, detail="در هر مرحله حداکثر ۱۰۰۰ سوال قابل ورود است.")
+
+    next_qid = _next_question_id()
+    docs_to_insert: List[dict] = []
+    errors: List[str] = []
+    now = datetime.now(timezone.utc)
+
+    for idx, raw in enumerate(items):
+        if not isinstance(raw, dict):
+            errors.append(f"Row #{idx + 1}: invalid object")
+            continue
+        try:
+            clean = _validate_question_payload(raw)
+        except HTTPException as exc:
+            errors.append(f"Row #{idx + 1}: {exc.detail}")
+            continue
+        raw_qid = raw.get("question_id", raw.get("id"))
+        if raw_qid is not None and str(raw_qid).isdigit():
+            qid = int(raw_qid)
+        else:
+            qid = next_qid
+            next_qid += 1
+        docs_to_insert.append({
+            "question_id": qid,
+            **clean,
+            "created_at": now,
+            "created_by": str(admin_id or "system"),
+        })
+
+    if docs_to_insert:
+        db.questions.insert_many(docs_to_insert, ordered=False)
+
+    _log_admin_action(admin_id, "bulk_import_questions", {
+        "inserted_count": len(docs_to_insert),
+        "skipped_count": len(errors),
+    })
+    return {
+        "inserted_count": len(docs_to_insert),
+        "skipped_count": len(errors),
+        "errors": errors[:20],
+    }
+
+
+# -------------------------------------------------------------
+# Promo / Gift Codes Management
+# -------------------------------------------------------------
+
+def _normalize_promo_code(raw: str) -> str:
+    clean = re.sub(r"[^A-Za-z0-9_-]", "", str(raw or "").strip().upper())
+    if len(clean) < 3 or len(clean) > 32:
+        raise HTTPException(status_code=400, detail="کد هدیه باید بین ۳ تا ۳۲ کاراکتر انگلیسی/عدد باشد.")
+    return clean
+
+
+def _parse_iso_optional(raw: Any) -> Optional[datetime]:
+    if raw is None or str(raw).strip() == "":
+        return None
+    if isinstance(raw, datetime):
+        return raw.replace(tzinfo=timezone.utc) if raw.tzinfo is None else raw.astimezone(timezone.utc)
+    s = str(raw).strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+        return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+    except Exception:
+        raise HTTPException(status_code=400, detail="فرمت تاریخ انقضا نامعتبر است.")
+
+
+def list_promos(
+    page: int = 1,
+    limit: int = 25,
+    search: Optional[str] = None,
+    status_filter: Optional[str] = "all",
+) -> dict:
+    query: dict = {}
+    if search and str(search).strip():
+        esc = _escape_regex(search)
+        query["$or"] = [
+            {"code": {"$regex": esc, "$options": "i"}},
+            {"title": {"$regex": esc, "$options": "i"}},
+        ]
+    if status_filter == "active":
+        query["is_active"] = True
+    elif status_filter == "inactive":
+        query["is_active"] = False
+
+    total = db.promo_codes.count_documents(query)
+    safe_limit = max(1, min(int(limit or 25), 100))
+    skip = max(0, (max(1, int(page or 1)) - 1) * safe_limit)
+    rows = list(db.promo_codes.find(query).sort([("created_at", -1)]).skip(skip).limit(safe_limit))
+
+    now_utc = datetime.now(timezone.utc)
+    items = []
+    for r in rows:
+        doc = _clean_doc(r)
+        exp = r.get("expires_at")
+        is_expired = False
+        if isinstance(exp, datetime):
+            exp_utc = exp.replace(tzinfo=timezone.utc) if exp.tzinfo is None else exp.astimezone(timezone.utc)
+            is_expired = now_utc >= exp_utc
+        max_uses = int(r.get("max_uses", 0) or 0)
+        used = int(r.get("used_count", 0) or 0)
+        doc["is_expired"] = is_expired
+        doc["is_exhausted"] = bool(max_uses > 0 and used >= max_uses)
+        items.append(doc)
+
+    return {
+        "items": items,
+        "total": total,
+        "page": max(1, int(page or 1)),
+        "limit": safe_limit,
+        "total_pages": max(1, (total + safe_limit - 1) // safe_limit),
+    }
+
+
+def create_promo(data: dict, admin_id: str = "") -> dict:
+    code = _normalize_promo_code(data.get("code", ""))
+    if db.promo_codes.find_one({"code": code}):
+        raise HTTPException(status_code=409, detail="این کد هدیه قبلاً ثبت شده است.")
+
+    title = str(data.get("title") or code).strip()
+    reward_coin = max(0, int(data.get("reward_coin", 0) or 0))
+    reward_xp = max(0, int(data.get("reward_xp", 0) or 0))
+    if reward_coin == 0 and reward_xp == 0:
+        raise HTTPException(status_code=400, detail="حداقل یکی از پاداش‌های سکه یا XP باید بزرگ‌تر از صفر باشد.")
+
+    max_uses = max(0, int(data.get("max_uses", 0) or 0))
+    per_user_limit = max(1, int(data.get("per_user_limit", 1) or 1))
+    expires_at = _parse_iso_optional(data.get("expires_at"))
+    is_active = bool(data.get("is_active", True))
+
+    promo_doc = {
+        "_id": generate_notice_id("prm_"),
+        "code": code,
+        "title": title,
+        "reward_coin": reward_coin,
+        "reward_xp": reward_xp,
+        "max_uses": max_uses,
+        "per_user_limit": per_user_limit,
+        "used_count": 0,
+        "expires_at": expires_at,
+        "is_active": is_active,
+        "created_at": datetime.now(timezone.utc),
+        "created_by": str(admin_id or "system"),
+    }
+    db.promo_codes.insert_one(promo_doc)
+    _log_admin_action(admin_id, "create_promo", {
+        "promo_id": promo_doc["_id"],
+        "code": code,
+        "reward_coin": reward_coin,
+        "reward_xp": reward_xp,
+        "max_uses": max_uses,
+    })
+    return _clean_doc(promo_doc)
+
+
+def update_promo(promo_id: str, data: dict, admin_id: str = "") -> dict:
+    pid = str(promo_id)
+    existing = db.promo_codes.find_one({"_id": pid})
+    if not existing:
+        raise HTTPException(status_code=404, detail="کد هدیه یافت نشد.")
+
+    upd: dict = {}
+    if "title" in data and data["title"] is not None:
+        upd["title"] = str(data["title"]).strip()
+    if "reward_coin" in data and data["reward_coin"] is not None:
+        upd["reward_coin"] = max(0, int(data["reward_coin"]))
+    if "reward_xp" in data and data["reward_xp"] is not None:
+        upd["reward_xp"] = max(0, int(data["reward_xp"]))
+    if "max_uses" in data and data["max_uses"] is not None:
+        upd["max_uses"] = max(0, int(data["max_uses"]))
+    if "per_user_limit" in data and data["per_user_limit"] is not None:
+        upd["per_user_limit"] = max(1, int(data["per_user_limit"]))
+    if "is_active" in data and data["is_active"] is not None:
+        upd["is_active"] = bool(data["is_active"])
+    if "expires_at" in data:
+        upd["expires_at"] = _parse_iso_optional(data["expires_at"])
+
+    if upd:
+        upd["updated_at"] = datetime.now(timezone.utc)
+        db.promo_codes.update_one({"_id": pid}, {"$set": upd})
+        _log_admin_action(admin_id, "update_promo", {"promo_id": pid, "code": existing.get("code"), "updates": _clean_doc(upd)})
+
+    return _clean_doc(db.promo_codes.find_one({"_id": pid}))
+
+
+def delete_promo(promo_id: str, admin_id: str = "") -> dict:
+    pid = str(promo_id)
+    existing = db.promo_codes.find_one({"_id": pid})
+    if not existing:
+        raise HTTPException(status_code=404, detail="کد هدیه یافت نشد.")
+    db.promo_codes.delete_one({"_id": pid})
+    _log_admin_action(admin_id, "delete_promo", {"promo_id": pid, "code": existing.get("code")})
+    return {"status": "deleted", "promo_id": pid}
+
+
+def list_promo_redemptions(promo_id: str, limit: int = 50) -> dict:
+    pid = str(promo_id)
+    existing = db.promo_codes.find_one({"_id": pid})
+    if not existing:
+        raise HTTPException(status_code=404, detail="کد هدیه یافت نشد.")
+    safe_limit = max(1, min(int(limit or 50), 200))
+    rows = list(db.promo_redemptions.find({"promo_id": pid}).sort([("redeemed_at", -1)]).limit(safe_limit))
+    name_map = _resolve_usernames([str(r.get("user_id") or "") for r in rows])
+    items = []
+    for r in rows:
+        doc = _clean_doc(r)
+        uid = str(r.get("user_id") or "")
+        doc["username"] = name_map.get(uid, uid)
+        items.append(doc)
+    return {
+        "promo": _clean_doc(existing),
+        "items": items,
+        "total": db.promo_redemptions.count_documents({"promo_id": pid}),
+    }
+

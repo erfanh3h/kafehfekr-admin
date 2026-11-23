@@ -64,6 +64,11 @@ class AdjustCurrencyRequest(BaseModel):
 class ToggleBanRequest(BaseModel):
     is_active: bool
     reason: Optional[str] = ""
+    duration_hours: Optional[int] = None
+
+
+class ForceLogoutRequest(BaseModel):
+    reason: Optional[str] = ""
 
 
 class BulkCoinsRequest(BaseModel):
@@ -116,6 +121,40 @@ class SendNotificationRequest(BaseModel):
     message: str = Field(..., min_length=2, max_length=1000)
     user_id: Optional[str] = None
     clan_id: Optional[str] = None
+
+
+class QuestionPayload(BaseModel):
+    question: str = Field(..., min_length=3, max_length=600)
+    options: List[str] = Field(..., min_length=4, max_length=4)
+    correct: int = Field(..., ge=0, le=3)
+    category_id: Optional[int] = 0
+    category_title: Optional[str] = "اطلاعات عمومی"
+    question_id: Optional[int] = None
+
+
+class BulkQuestionsImportRequest(BaseModel):
+    items: List[dict]
+
+
+class CreatePromoRequest(BaseModel):
+    code: str = Field(..., min_length=3, max_length=32)
+    title: Optional[str] = ""
+    reward_coin: int = Field(0, ge=0)
+    reward_xp: int = Field(0, ge=0)
+    max_uses: int = Field(0, ge=0)
+    per_user_limit: int = Field(1, ge=1)
+    expires_at: Optional[str] = None
+    is_active: Optional[bool] = True
+
+
+class UpdatePromoRequest(BaseModel):
+    title: Optional[str] = None
+    reward_coin: Optional[int] = None
+    reward_xp: Optional[int] = None
+    max_uses: Optional[int] = None
+    per_user_limit: Optional[int] = None
+    expires_at: Optional[str] = None
+    is_active: Optional[bool] = None
 
 
 # -------------------------------------------------------------
@@ -303,6 +342,20 @@ async def toggle_user_ban(
         user_id=user_id,
         is_active=payload.is_active,
         reason=payload.reason,
+        duration_hours=payload.duration_hours,
+        admin_id=current_admin["_id"],
+    )
+
+
+@router.post("/users/{user_id}/force-logout")
+async def force_logout_player(
+    user_id: str,
+    payload: Optional[ForceLogoutRequest] = None,
+    current_admin: dict = Depends(require_permission("users:write")),
+):
+    return admin_service.force_logout_user(
+        user_id=user_id,
+        reason=(payload.reason if payload else "") or "",
         admin_id=current_admin["_id"],
     )
 
@@ -599,3 +652,134 @@ async def delete_backup(
     current_admin: dict = Depends(require_permission("system:backup")),
 ):
     return admin_service.delete_system_backup(filename, admin_id=current_admin["_id"])
+
+
+@router.get("/system/runtime-status")
+async def get_runtime_status(current_admin: dict = Depends(require_permission("dashboard:read"))):
+    return admin_service.get_realtime_runtime_status()
+
+
+# -------------------------------------------------------------
+# Quiz Question Bank
+# -------------------------------------------------------------
+
+@router.get("/questions/categories")
+async def get_question_categories(current_admin: dict = Depends(require_permission("config:read"))):
+    return admin_service.get_question_categories()
+
+
+@router.get("/questions")
+async def list_quiz_questions(
+    page: int = 1,
+    limit: int = 25,
+    search: Optional[str] = None,
+    category_title: Optional[str] = None,
+    category_id: Optional[int] = None,
+    current_admin: dict = Depends(require_permission("config:read")),
+):
+    return admin_service.list_questions(
+        page=page,
+        limit=limit,
+        search=search,
+        category_title=category_title,
+        category_id=category_id,
+    )
+
+
+@router.post("/questions")
+async def create_quiz_question(
+    payload: QuestionPayload,
+    current_admin: dict = Depends(require_permission("config:write")),
+):
+    return {"question": admin_service.create_question(_dump(payload), admin_id=current_admin["_id"])}
+
+
+@router.post("/questions/bulk-import")
+async def bulk_import_quiz_questions(
+    payload: BulkQuestionsImportRequest,
+    current_admin: dict = Depends(require_permission("config:write")),
+):
+    return admin_service.bulk_import_questions(payload.items, admin_id=current_admin["_id"])
+
+
+@router.put("/questions/{question_id}")
+async def update_quiz_question(
+    question_id: str,
+    payload: QuestionPayload,
+    current_admin: dict = Depends(require_permission("config:write")),
+):
+    return {
+        "question": admin_service.update_question(
+            question_id,
+            _dump(payload, exclude_unset=True),
+            admin_id=current_admin["_id"],
+        )
+    }
+
+
+@router.delete("/questions/{question_id}")
+async def delete_quiz_question(
+    question_id: str,
+    current_admin: dict = Depends(require_permission("config:write")),
+):
+    return admin_service.delete_question(question_id, admin_id=current_admin["_id"])
+
+
+# -------------------------------------------------------------
+# Promo / Gift Codes
+# -------------------------------------------------------------
+
+@router.get("/promos")
+async def list_promo_codes(
+    page: int = 1,
+    limit: int = 25,
+    search: Optional[str] = None,
+    status_filter: Optional[str] = "all",
+    current_admin: dict = Depends(require_permission("economy:read")),
+):
+    return admin_service.list_promos(
+        page=page,
+        limit=limit,
+        search=search,
+        status_filter=status_filter,
+    )
+
+
+@router.post("/promos")
+async def create_promo_code(
+    payload: CreatePromoRequest,
+    current_admin: dict = Depends(require_permission("economy:write")),
+):
+    return {"promo": admin_service.create_promo(_dump(payload), admin_id=current_admin["_id"])}
+
+
+@router.put("/promos/{promo_id}")
+async def update_promo_code(
+    promo_id: str,
+    payload: UpdatePromoRequest,
+    current_admin: dict = Depends(require_permission("economy:write")),
+):
+    return {
+        "promo": admin_service.update_promo(
+            promo_id,
+            _dump(payload, exclude_unset=True),
+            admin_id=current_admin["_id"],
+        )
+    }
+
+
+@router.delete("/promos/{promo_id}")
+async def delete_promo_code(
+    promo_id: str,
+    current_admin: dict = Depends(require_permission("economy:write")),
+):
+    return admin_service.delete_promo(promo_id, admin_id=current_admin["_id"])
+
+
+@router.get("/promos/{promo_id}/redemptions")
+async def get_promo_redemptions(
+    promo_id: str,
+    limit: int = 50,
+    current_admin: dict = Depends(require_permission("economy:read")),
+):
+    return admin_service.list_promo_redemptions(promo_id, limit=limit)
