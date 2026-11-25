@@ -230,6 +230,7 @@ export interface SystemConfig {
   announcement?: string;
   announcement_active?: boolean;
   update_finish_date?: string;
+  windows_link?: string;
 }
 
 export interface AuditLogItem {

@@ -1132,6 +1132,7 @@ def get_system_config() -> dict:
     cleaned.setdefault("maintenance_message", "")
     cleaned.setdefault("announcement", "")
     cleaned.setdefault("announcement_active", False)
+    cleaned.setdefault("windows_link", "")
     return cleaned
 
 
@@ -1179,6 +1180,15 @@ def set_maintenance_mode(maintenance_mode: bool, maintenance_message: str = "", 
         "maintenance_message": clean_msg,
     })
     return {"maintenance_mode": bool(maintenance_mode), "maintenance_message": clean_msg}
+
+
+def set_windows_link(windows_link: str, admin_id: str = "") -> dict:
+    clean_link = str(windows_link or "").strip()
+    _upsert_config({
+        "windows_link": clean_link,
+    })
+    _log_admin_action(admin_id, "set_windows_link", {"windows_link": clean_link})
+    return {"windows_link": clean_link}
 
 
 # -------------------------------------------------------------

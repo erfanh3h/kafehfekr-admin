@@ -102,6 +102,10 @@ class MaintenanceConfigRequest(BaseModel):
     maintenance_message: Optional[str] = ""
 
 
+class WindowsLinkConfigRequest(BaseModel):
+    windows_link: Optional[str] = ""
+
+
 class UpdateClanRequest(BaseModel):
     name: Optional[str] = None
     tag: Optional[str] = None
@@ -485,6 +489,17 @@ async def set_maintenance(
     return admin_service.set_maintenance_mode(
         maintenance_mode=payload.maintenance_mode,
         maintenance_message=payload.maintenance_message or "",
+        admin_id=current_admin["_id"],
+    )
+
+
+@router.post("/config/windows-link")
+async def set_windows_link(
+    payload: WindowsLinkConfigRequest,
+    current_admin: dict = Depends(require_permission("config:write")),
+):
+    return admin_service.set_windows_link(
+        windows_link=payload.windows_link or "",
         admin_id=current_admin["_id"],
     )
 

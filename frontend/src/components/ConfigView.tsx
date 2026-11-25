@@ -7,6 +7,7 @@ import {
   RefreshCw,
   Wrench,
   AlertTriangle,
+  Monitor,
 } from 'lucide-react';
 import { ApiService } from '../services/api';
 import { AdminUser, LangCode, SystemConfig } from '../types';
@@ -41,6 +42,8 @@ export const ConfigView: React.FC<ConfigViewProps> = ({
   const [maintenanceMode, setMaintenanceMode] = useState(false);
   const [maintenanceMessage, setMaintenanceMessage] = useState('');
 
+  const [windowsLink, setWindowsLink] = useState('');
+
   const canWriteConfig = hasAdminPermission(currentAdmin, 'config:write');
 
   const fetchConfig = async () => {
@@ -56,6 +59,7 @@ export const ConfigView: React.FC<ConfigViewProps> = ({
       setAnnouncementActive(cfg.announcement_active ?? Boolean(cfg.announcement));
       setMaintenanceMode(Boolean(cfg.maintenance_mode));
       setMaintenanceMessage(cfg.maintenance_message || '');
+      setWindowsLink(cfg.windows_link || '');
     } catch (err: any) {
       onNotify(err.message, 'error');
     } finally {
@@ -122,6 +126,23 @@ export const ConfigView: React.FC<ConfigViewProps> = ({
           : maintenanceMode
           ? 'Maintenance mode enabled.'
           : 'Maintenance mode disabled.',
+        'success'
+      );
+      onConfigChanged?.();
+    } catch (err: any) {
+      onNotify(err.message, 'error');
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const handleSaveWindowsLink = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving('windows_link');
+    try {
+      await ApiService.setWindowsLink(windowsLink.trim());
+      onNotify(
+        lang === 'fa' ? 'لینک دانلود ویندوز ذخیره شد.' : 'Windows download link saved.',
         'success'
       );
       onConfigChanged?.();
@@ -412,6 +433,48 @@ export const ConfigView: React.FC<ConfigViewProps> = ({
               <button type="submit" className="btn btn-primary" disabled={saving === 'announcement'}>
                 <Save size={15} />
                 <span>{saving === 'announcement' ? (lang === 'fa' ? 'در حال ذخیره...' : 'Saving...') : lang === 'fa' ? 'ذخیره بنر اعلان' : 'Save Banner'}</span>
+              </button>
+            )}
+          </form>
+        </section>
+
+        {/* Windows Download Link */}
+        <section className="card">
+          <div className="card-header">
+            <div className="card-title">
+              <Monitor size={16} className="text-sapphire" />
+              <span>{lang === 'fa' ? 'لینک دانلود نسخه ویندوز' : 'Windows Download Link'}</span>
+            </div>
+          </div>
+
+          <form onSubmit={handleSaveWindowsLink}>
+            <div className="input-group">
+              <label htmlFor="cfg-windows-link" className="input-label">
+                {lang === 'fa' ? 'آدرس دانلود یا صفحه نسخه ویندوز' : 'Windows Version URL'}
+              </label>
+              <input
+                id="cfg-windows-link"
+                type="url"
+                className="input-field mono"
+                value={windowsLink}
+                onChange={(e) => setWindowsLink(e.target.value)}
+                placeholder="https://example.com/kafehfekr-windows"
+                disabled={!canWriteConfig}
+              />
+            </div>
+
+            {canWriteConfig && (
+              <button type="submit" className="btn btn-primary" disabled={saving === 'windows_link'}>
+                <Save size={15} />
+                <span>
+                  {saving === 'windows_link'
+                    ? lang === 'fa'
+                      ? 'در حال ذخیره...'
+                      : 'Saving...'
+                    : lang === 'fa'
+                    ? 'ذخیره لینک ویندوز'
+                    : 'Save Windows Link'}
+                </span>
               </button>
             )}
           </form>

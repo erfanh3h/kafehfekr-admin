@@ -357,6 +357,13 @@ export class ApiService {
     });
   }
 
+  public static async setWindowsLink(windowsLink: string): Promise<any> {
+    return this.request('/admin/config/windows-link', {
+      method: 'POST',
+      body: JSON.stringify({ windows_link: windowsLink }),
+    });
+  }
+
   // ---------------- Purchases ----------------
   public static async getPurchases(params: {
     page?: number;
